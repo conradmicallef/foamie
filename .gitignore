@@ -2,3 +2,5 @@ core/target/
 web/node_modules/
 web/gen/
 web/dist/
+sitl/target/
+sitl/run/

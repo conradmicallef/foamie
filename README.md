@@ -66,6 +66,28 @@ Aerobatics (`cargo run --release --example show [real] [wind]`, `show_stats [rea
 
 For centimetre landings on a real airframe you would add RTK GPS, optical flow, or a precision-landing beacon.
 
+## Flying real ArduPilot on the foamie (SITL)
+
+`sitl/` is an ArduPilot SITL **JSON physics backend**: real ArduPlane firmware flies the same airframe, aero, prop-wash and ground-contact model as the browser sim. ArduPilot sends servo PWM over UDP each physics frame (lock-step); `foamie-sitl` steps `foamie_core::model::Truth` and replies with IMU, position, velocity and attitude, converting the core's ENU/FLU frames to ArduPilot's NED/FRD. ArduPilot then adds its own simulated GPS, baro, compass and airspeed and runs its own EKF3.
+
+`sitl/foamie.parm` sets ArduPlane up as a single-motor tail-sitter (`Q_ENABLE 1`, `Q_FRAME_CLASS 10`, `Q_TAILSIT_ENABLE 1`, `Q_M_THST_HOVER 0.55`); outputs are ArduPlane's defaults — SERVO1 aileron, SERVO2 elevator, SERVO3 throttle, SERVO4 rudder.
+
+```sh
+git clone https://github.com/ArduPilot/ardupilot ~/ardupilot && cd ~/ardupilot
+git submodule update --init --recursive
+./waf configure --board sitl && ./waf plane
+pip install pymavlink
+cd foamie/sitl && ./run.sh --stage all     # WIND=4 for gusts, SPEEDUP=4 by default
+```
+
+`run.sh` starts the bridge and `arduplane --model JSON:127.0.0.1 --defaults foamie.parm`, then `fly.py` flies over MAVLink (TCP 5760 — a ground station such as Mission Planner or QGroundControl can connect there instead). With stock ArduPilot gains (master, October 2026):
+
+| Flight | Result |
+|---|---|
+| QLOITER climb to 10 m, 20 s hands-off hover, QLAND, calm | held within 4 cm; landed 0.11 m from the take-off point; disarmed itself |
+| Same in 4 m/s gusts | about 2 m RMS wander (up to 5 m) — gains not tuned for this airframe; the browser sim's own controller with weathervaning holds 0.2–0.8 m |
+| AUTO: VTOL takeoff to 15 m, transition, 160 × 80 m fixed-wing circuit at 25 m and 14 m/s, VTOL landing | completed hands-off in 132 s; landed 0.24 m from home; balloons about 7 m during the back-transition, as tail-sitters do |
+
 ## Layout
 
 ```
@@ -80,6 +102,7 @@ core/                 Rust flight core (no_std, compiles to wasm32)
   src/aerobatics.rs   path-tracked aerobatic figures, positioning and the show sequence
   tests/scenarios.rs  flight scenarios that must keep working
   examples/bench.rs   the benchmark above; examples/show.rs each figure; examples/est_stats.rs estimator accuracy
+sitl/                 ArduPilot SITL JSON backend on the same physics, tail-sitter params, test flight
 web/                  TypeScript front end
   src/core.ts         loads the WebAssembly core and reads its state and events
   src/render.ts       3D view on a 2D canvas

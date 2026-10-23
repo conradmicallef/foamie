@@ -1,0 +1,12 @@
+[package]
+name = "foamie-sitl"
+version = "0.1.0"
+edition = "2021"
+description = "ArduPilot SITL JSON physics backend: flies ArduPlane on the foamie tail-sitter physics."
+license = "GPL-3.0-or-later"
+
+[dependencies]
+foamie-core = { path = "../core" }
+
+[profile.release]
+opt-level = 3

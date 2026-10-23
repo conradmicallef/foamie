@@ -14,7 +14,7 @@ jobs:
       - name: Rust with the wasm32 target
         run: rustup target add wasm32-unknown-unknown
       - name: Test the flight core
-        run: cargo test --release --manifest-path core/Cargo.toml
+        run: cargo test --release --manifest-path core/Cargo.toml && cargo test --release --manifest-path sitl/Cargo.toml
       - uses: actions/setup-node@v4
         with:
           node-version: 22
