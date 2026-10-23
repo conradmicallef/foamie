@@ -14,13 +14,14 @@ A mobile flight simulator for a high-powered 3D foam plane that takes off and la
   - **QHover** – QStabilize plus height hold (left stick = climb rate).
   - **QLoiter** – position hold over the ground; stick moves the hover.
 - **Autopilot buttons:** **Takeoff** (vertical climb, pitch-over, joins the circuit), **Circuit** (racetrack round the pad at 20 m), **Land** (straight in, pull vertical to brake, descend onto the legs). Moving a stick takes over.
-- **Aerobatics (Show button):** the full show — loop, axial roll, Immelmann, four-point roll, split-S, hammerhead, Cuban eight and a prop-hang torque roll — or any single figure (`core/src/aerobatics.rs`).
-  - **Flown on a path:** each figure is real geometry in a vertical plane — lines, circles, rolls placed on lines, a stall-turn pivot, a prop hang. The guidance works out the acceleration needed to stay on it (curvature, cross-track error, gravity) and points the nose so lift and fuselage side force make it, so knife-edge gets top rudder and inverted gets push automatically.
+- **Aerobatics (Show button):** a 12-figure show — loop, axial roll, knife-edge pass, Immelmann, four-point roll, rolling circle, split-S, hammerhead, harrier, Cuban eight, waterfall and a prop-hang torque roll — or any single figure (`core/src/aerobatics.rs`).
+  - **Flown on a path:** each figure is real geometry — lines, circles, rolls placed on lines, a horizontal rolling circle, a stall-turn pivot (quarter-rolled so it stays in the figure plane), harrier slow flight, a tumble, a prop hang. The guidance works out the acceleration needed to stay on it (curvature, cross-track error, gravity) and points the nose so lift and fuselage side force make it, so knife-edge gets top rudder and inverted gets push automatically.
   - **Centre stage, into wind:** every figure is centred on the show centre 46 m in front of the pilot and entered into the wind.
+  - **Flying the wind:** each figure drifts with the along-line mean wind, so the plane flies a clean shape relative to the air; the planned path is walked in time with that drift and the drifted shape is centred. In 4 m/s gusts (5 seeds) this took ideal-mode figures completed from 35/40 to 40/40 with no recoveries.
   - **Repositioning:** before each figure the plane flies out past the entry gate, turns back onto the show line, and only starts when it crosses the gate on line, height, heading and speed; otherwise it goes round again.
   - **Safety:** recovery stays armed. It trusts a figure while the plane is on its planned path, and if it does step in, the show carries on with the next figure.
 - **Recovery:** predicts ground impact up to 10 s ahead along the curved flight path and pulls out automatically when the time left is shorter than this airframe needs to stop the sink.
-- **Weathervane:** in QHover/QLoiter the plane turns its wing edge-on to the wind when you leave the yaw stick centred (like ArduPilot's `Q_WVANE_GAIN`); broadside, the wing catches too much wind to hold position.
+- **Weathervane:** in QHover/QLoiter the plane turns its wing edge-on to the wind when you leave the yaw stick centred (like ArduPilot's `Q_WVANE_GAIN`); broadside, the wing catches too much wind to hold position. In real-plane mode the wind comes from the EKF's hover drag-fusion estimate (like `EK3_DRAG_*`).
 - **Real plane:** flies the same software on simulated sensors instead of perfect knowledge — see below.
 
 Stick convention is a real transmitter's (mode 2): right stick forward = nose down in the wing-borne modes, and tilt toward the belly in the hover modes. On a computer: W/S throttle, A/D yaw, arrow keys pitch and roll.
@@ -59,9 +60,9 @@ Estimate error vs truth (`cargo run --release --example est_stats [old]`, hover 
 | QLoiter in 2–4 m/s gusts: mean drift | 0.22 m | 0.82 m |
 | Recovery: full-down dive, inverted motor-off | saved | saved |
 | Recovery false alarms: split-S, FBWA cruise, hover landing | none | none |
-| Aerobatic show in calm air: 8 figures, no recovery, centred within | 2 m | 2.5 m |
+| Aerobatic show in calm air: 12 figures, no recovery, centred within | 2 m | 3 m |
 
-Aerobatics (`cargo run --release --example show [real] [wind]`): path error 1.6–5.4 m RMS per figure in calm air, every figure entered into wind. In 4 m/s gusts the show completes, occasionally abandoning a figure that strays off its path low down.
+Aerobatics (`cargo run --release --example show [real] [wind]`, `show_stats [real]`): path error about 1–5.6 m RMS per figure in calm air, every figure entered into wind. In 4 m/s gusts the ideal-mode show completes with no recoveries; real-plane mode occasionally abandons a figure that strays off its path low down and carries on with the next.
 
 For centimetre landings on a real airframe you would add RTK GPS, optical flow, or a precision-landing beacon.
 
@@ -80,7 +81,7 @@ core/                 Rust flight core (no_std, compiles to wasm32)
   tests/scenarios.rs  flight scenarios that must keep working
   examples/bench.rs   the benchmark above; examples/show.rs each figure; examples/est_stats.rs estimator accuracy
 web/                  TypeScript front end
-  src/core.ts         loads the core (WebAssembly, or its wasm2js build if a page forbids WebAssembly)
+  src/core.ts         loads the WebAssembly core and reads its state and events
   src/render.ts       3D view on a 2D canvas
   src/main.ts         sticks, buttons, instruments, messages
   build.mjs           builds everything into one self-contained web/dist/index.html
@@ -91,10 +92,10 @@ web/                  TypeScript front end
 ```sh
 cd core && cargo test --release            # flight scenarios
 rustup target add wasm32-unknown-unknown
-cd web && npm ci && npm run build          # → web/dist/index.html (≈330 KB, no server needed)
+cd web && npm ci && npm run build          # → web/dist/index.html (≈170 KB, no server needed)
 ```
 
-`build.mjs` compiles the core for the baseline (MVP) WebAssembly target and also translates it to plain JavaScript with binaryen's `wasm2js`; the page tries WebAssembly first and falls back to the JS build, so it also runs where WebAssembly is blocked. Without a prebuilt `wasm32` standard library it builds `core` from `rust-src` (`-Zbuild-std`).
+`build.mjs` compiles the core for the baseline (MVP) WebAssembly target, optimises it with binaryen's `wasm-opt` and embeds it in the page. Without a prebuilt `wasm32` standard library it builds `core` from `rust-src` (`-Zbuild-std`).
 
 Pushing to `main` runs `.github/workflows/pages.yml`, which tests the core, builds the page and publishes it to the `gh-pages` branch. In the repository's **Settings → Pages**, set the source to the `gh-pages` branch.
 

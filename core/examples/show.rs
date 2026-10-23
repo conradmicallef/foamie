@@ -41,7 +41,7 @@ fn main() {
     let real = std::env::args().any(|a| a == "real");
     let wind = if std::env::args().any(|a| a == "wind") { 2 } else { 0 };
     println!("== single figures ({}, wind {} m/s from E) ==", if real { "real plane" } else { "ideal" }, [0, 2, 4][wind]);
-    for f in 1..=8 { fly(real, wind, Fig::from(f), 40 + f as u64); }
+    for f in 1..=12 { fly(real, wind, Fig::from(f), 40 + f as u64); }
     println!("== full show ==");
     let (figs, crashed, rec) = fly(real, wind, None, 77);
     println!("  -> {} figures, crashed {}, recoveries {}", figs, crashed, rec);

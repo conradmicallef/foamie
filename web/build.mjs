@@ -1,4 +1,4 @@
-// Build: Rust core → WebAssembly (+ wasm2js fallback) → bundle TypeScript → one self-contained dist/index.html.
+// Build: Rust core → WebAssembly → bundle TypeScript → one self-contained dist/index.html.
 //   node build.mjs            full build (needs cargo and the wasm32-unknown-unknown target)
 //   node build.mjs --web-only reuse gen/ (wasm already built)
 import { execSync } from 'node:child_process';
@@ -12,7 +12,7 @@ mkdirSync('dist', { recursive: true });
 
 if (!webOnly) {
   const target = '../core/target/wasm32-unknown-unknown/release/foamie_core.wasm';
-  // MVP target: widest browser support, and wasm2js can translate it for pages that forbid WebAssembly
+  // MVP target: widest browser support
   const flags = { RUSTFLAGS: '-C target-cpu=mvp' };
   const installed = execSync('rustup target list --installed 2>/dev/null || true').toString().includes('wasm32-unknown-unknown');
   if (installed) {
@@ -24,7 +24,6 @@ if (!webOnly) {
       { ...flags, RUSTC_BOOTSTRAP: '1' });
   }
   sh(`npx wasm-opt -O3 ${target} -o gen/foamie_core.wasm`);
-  sh('npx wasm2js -O2 gen/foamie_core.wasm -o gen/fallback.js');
 }
 if (!existsSync('gen/foamie_core.wasm')) throw new Error('gen/foamie_core.wasm missing: run a full build first');
 

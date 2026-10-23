@@ -18,6 +18,10 @@ const FIG: Record<number, [string, string]> = {
   6: ['Hammerhead', 'Straight up until nearly stopped, rudder pivot, straight down, pull out'],
   7: ['Cuban eight', 'Five-eighths loop, half roll on the 45° down-line, and again'],
   8: ['Torque roll', 'Up into a prop hang, spinning on the prop, then pitch out'],
+  9: ['Knife-edge pass', 'Quarter roll, a long line on the wingtip held up with top rudder, quarter roll back'],
+  10: ['Rolling circle', 'A full horizontal circle away from you while rolling twice'],
+  11: ['Harrier', 'Slow and nose-high on the prop, about 4.5 m/s, height held on throttle'],
+  12: ['Waterfall', 'Slow into a harrier, tumble nose-down through 360° on full power, fly away'],
 };
 const PHASE_TXT: Record<number, string> = {
   1: 'climbing vertically to 8 m', 2: 'pitching over to wing-borne flight', 3: 'flying the circuit', 4: 'straight in to the pad',
@@ -201,7 +205,7 @@ function hud(st: State, now: number) {
 // ---- start
 async function main() {
   const core = await Core.load(Math.floor(Math.random() * 1e6));
-  $('engine').textContent = core.engine === 'wasm' ? 'Rust · WebAssembly' : 'Rust · JS build';
+  $('engine').textContent = 'Rust · WebAssembly';
   const renderer = new Renderer($('cv') as HTMLCanvasElement);
   let smoke = false, windLvl = 0, real = false, trailT = 0;
 

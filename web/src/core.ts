@@ -1,7 +1,6 @@
-// Loads the Rust flight core (WebAssembly, or its wasm2js build when the page may not compile WebAssembly)
-// and gives typed access to its state buffer and events. Layout must match core/src/lib.rs `fz_state`.
+// Loads the Rust flight core (WebAssembly) and gives typed access to its state buffer and events.
+// Layout must match core/src/lib.rs `fz_state`.
 import wasmBytes from '../gen/foamie_core.wasm';
-import * as fallback from '../gen/fallback.js';
 import type { Quat, V3 } from './vec';
 
 interface Exports {
@@ -83,21 +82,14 @@ export class State {
 }
 
 export class Core {
-  private constructor(private x: Exports, readonly engine: 'wasm' | 'js') {}
+  private constructor(private x: Exports) {}
 
   static async load(seed: number): Promise<Core> {
-    let x: Exports;
-    let engine: 'wasm' | 'js' = 'wasm';
-    try {
-      const { instance } = await WebAssembly.instantiate(wasmBytes, {});
-      x = instance.exports as unknown as Exports;
-    } catch {
-      // the page's security policy can forbid compiling WebAssembly: run the same Rust core as plain JS
-      x = fallback as unknown as Exports;
-      engine = 'js';
-    }
+    if (typeof WebAssembly === 'undefined') throw new Error('this browser has no WebAssembly');
+    const { instance } = await WebAssembly.instantiate(wasmBytes, {});
+    const x = instance.exports as unknown as Exports;
     x.fz_init(seed);
-    return new Core(x, engine);
+    return new Core(x);
   }
 
   reset() { this.x.fz_reset(); }

@@ -161,7 +161,7 @@ fn show(real: bool, wind: usize, fig: Option<foamie_core::aerobatics::Fig>, seed
 
 #[test]
 fn every_aerobatic_figure_flies_cleanly_and_centred() {
-    for f in 1..=8 {
+    for f in 1..=12 {
         let fig = foamie_core::aerobatics::Fig::from(f).unwrap();
         let (crashed, figs, rec, low, centre, _) = show(false, 0, Some(fig), 40 + f as u64);
         assert!(!crashed && figs == 1 && rec == 0, "{fig:?}: crashed {crashed}, recoveries {rec}");
@@ -175,7 +175,7 @@ fn full_aerobatic_show_ideal_and_real() {
     for real in [false, true] {
         let (crashed, figs, rec, _, _, _) = show(real, 0, None, 77);
         assert!(!crashed, "real = {real}");
-        assert_eq!(figs, 8, "all eight figures (real = {real})");
+        assert_eq!(figs, 12, "all twelve figures (real = {real})");
         if !real { assert_eq!(rec, 0, "no recovery needed in calm air"); }
     }
 }
@@ -184,7 +184,7 @@ fn full_aerobatic_show_ideal_and_real() {
 fn figures_enter_into_wind_and_show_survives_gusts() {
     // wind from the east: every figure starts heading east; recoveries may abandon a figure, never the aircraft
     let (crashed, figs, rec, _, centre, east) = show(false, 2, None, 78);
-    assert!(!crashed && figs == 8);
+    assert!(!crashed && figs == 12);
     assert_eq!(rec, 0, "flying the wind: no recovery needed in 4 m/s gusts");
     assert!(centre < 6.0, "centred in wind within {centre:.1} m");
     assert!(east > 0.99, "into wind: {east}");
