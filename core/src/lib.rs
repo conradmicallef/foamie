@@ -11,6 +11,7 @@ pub mod math;
 pub mod model;
 pub mod sensors;
 pub mod estimator;
+pub mod ekf;
 pub mod flight;
 pub mod sim;
 pub mod aerobatics;
@@ -102,7 +103,7 @@ fn sim() -> &'static mut Sim {
     o[57] = tr.aux.thrust / (model::AC.m * model::G);
     o[58] = n.v[2];
     o[59] = s.var.battery as u8 as f64;
-    if let Some(a) = s.auto { if a.task == Task::Show { o[60] = a.show.current() as u8 as f64; o[61] = a.show.fig as f64; o[62] = a.show.n as f64; } }
+    if let Some(a) = s.auto { if a.task == Task::Show { o[60] = a.show.current() as u8 as f64; o[61] = a.show.fig as f64; o[62] = a.show.n as f64; o[63] = a.show.stage as u8 as f64; } }
     unsafe { STATE = o; STATE.as_ptr() }
 }
 

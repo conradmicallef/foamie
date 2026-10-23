@@ -78,6 +78,8 @@ export class State {
   get figure() { return this.s[60]; }
   get figureIndex() { return this.s[61]; }
   get showLength() { return this.s[62]; }
+  /** 0 pitching out of a hover, 1 positioning for the entry gate, 2 flying the figure. */
+  get showStage() { return this.s[63]; }
 }
 
 export class Core {

@@ -2,6 +2,7 @@
 //! with an event queue the UI turns into messages.
 
 use crate::estimator::{nav_from_truth, Estimator, Nav};
+use crate::ekf::Ekf;
 use crate::flight::*;
 use crate::math::*;
 use crate::model::*;
@@ -29,6 +30,9 @@ pub struct Sim {
     pub real: bool,
     sensors: Sensors,
     est: Estimator,
+    ekf: Ekf,
+    /// Real-plane mode estimator: the EKF (default) or the simpler complementary filter, for comparison.
+    pub use_ekf: bool,
     pub fc: Fc,
     pub mode: Mode,
     pub auto: Option<Auto>,
@@ -53,7 +57,7 @@ impl Sim {
         let nav = nav_from_truth(&truth, &wind, [0.0; 3]);
         let mut s = Sim {
             truth, wind, var: Variation::IDEAL, real: false,
-            sensors: Sensors::new(seed), est: Estimator::new(&truth), fc: Fc::new(nav),
+            sensors: Sensors::new(seed), est: Estimator::new(&truth), ekf: Ekf::new(&truth), use_ekf: true, fc: Fc::new(nav),
             mode: Mode::QLoiter, auto: None, recover_on: true, vane_on: true, wind_lvl: 0,
             crashed: false, airborne: false, impact: (f64::INFINITY, 0.0),
             sticks: Sticks { ly: 1.0, ..Sticks::default() }, events: [None; MAX_EV],
@@ -73,6 +77,7 @@ impl Sim {
         self.var = if self.real { Variation::random(&mut self.rng) } else { Variation::IDEAL };
         self.sensors = Sensors::new(self.seed);
         self.est = Estimator::new(&self.truth);
+        self.ekf = Ekf::new(&self.truth);
         self.fc = Fc::new(nav_from_truth(&self.truth, &self.wind, [0.0; 3]));
         self.auto = None;
         self.crashed = false;
@@ -191,11 +196,11 @@ impl Sim {
                     Step::Running => {}
                     Step::FigureStarted(f) => self.emit(Ev::FigureStarted, f as u8 as f64, (sh.fig + 1) as f64, sh.n as f64, 0.0),
                     Step::FigureDone(f) => {
-                        self.emit(Ev::FigureDone, f as u8 as f64, n.p[2], 0.0, 0.0);
+                        self.emit(Ev::FigureDone, f as u8 as f64, sh.path_rms(), sh.errmax, 0.0);
                         if sh.single { a.task = Task::Circuit; a.phase = Phase::Fly; a.t = 0.0; self.fc.reset_i(); }
                     }
                     Step::ShowDone => {
-                        self.emit(Ev::ShowDone, 0.0, n.p[2], 0.0, 0.0);
+                        self.emit(Ev::ShowDone, 8.0, sh.path_rms(), sh.errmax, n.p[2]);
                         a.task = Task::Circuit; a.phase = Phase::Fly; a.t = 0.0; self.fc.reset_i();
                     }
                 }
@@ -258,6 +263,14 @@ impl Sim {
                 let s = self.sticks;
                 let centred = abs(s.rx) < 0.15 && abs(s.ry) < 0.15 && abs(s.lx) < 0.2;
                 a.c = if centred { a.c + dt } else { 0.0 };
+                if let Some(sh) = a.then_show {
+                    // the recovery interrupted a show: carry on with the next figure
+                    if a.wing && n.p[2] > 8.0 {
+                        self.auto = Some(Auto { task: Task::Show, phase: Phase::Show, t: 0.0, show: sh, then_show: None, ..a });
+                        self.emit(Ev::Recovered, self.mode as u8 as f64, n.p[2], 1.0, 0.0);
+                        return;
+                    }
+                }
                 if a.c > 0.4 {
                     let m = if x[2] > 0.7 { if a.back.is_q() { if a.back == Mode::QStab { Mode::QHover } else { a.back } } else { Mode::QLoiter } } else { Mode::Fbwa };
                     self.auto = None;
@@ -278,13 +291,17 @@ impl Sim {
     fn check_recovery(&mut self) {
         let (t, v) = self.impact;
         if !self.airborne || self.crashed || t == f64::INFINITY || self.fc.deliberate_landing() || v < 1.8 { return; }
+        // a show figure on its planned path will pull out as planned; only step in if impact is very close
+        if let Some(a) = self.auto { if a.task == Task::Show && a.show.on_track && t > 0.8 { return; } }
         if t < self.fc.time_to_recover() {
             let x = axes(self.fc.nav.q).0;
             let fast = x[2] < 0.6 && self.fc.nav.air > 8.0;
+            // remember an interrupted show so it can carry on with the next figure once safe
+            let resume = match self.auto { Some(a) if a.task == Task::Show => { let mut sh = a.show; if sh.skip_figure() { Some(sh) } else { None } } _ => None };
             self.auto = Some(Auto {
                 task: Task::Recover, phase: if fast { Phase::Pull } else { Phase::HoverUp }, t: 0.0,
                 hd: [0.0, 1.0], ly0: self.sticks.ly, back: self.mode, wing: false, c: 0.0,
-                show: Show::full(), then_show: None,
+                show: Show::full(), then_show: resume,
             });
             self.fc.reset_i();
             self.emit(Ev::Recovery, t, v, 0.0, 0.0);
@@ -351,7 +368,7 @@ impl Sim {
     fn refresh_nav(&mut self, dt: f64) {
         if self.real {
             let m = self.sensors.sample(&self.truth, &self.wind, dt);
-            self.fc.nav = self.est.update(&m, self.fc.act.thr, dt, None);
+            self.fc.nav = if self.use_ekf { self.ekf.update_all(&m, self.fc.act.thr, dt, None) } else { self.est.update(&m, self.fc.act.thr, dt, None) };
         } else {
             self.fc.nav = nav_from_truth(&self.truth, &self.wind, self.af_truth);
         }

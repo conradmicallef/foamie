@@ -25,6 +25,8 @@ pub struct Nav {
     pub on_ground: bool,
     /// Wind direction hint for weathervaning (world, horizontal), if known.
     pub wind: Option<[f64; 2]>,
+    /// Wind estimate (world, horizontal): exact in ideal mode, from GPS and pitot in wing-borne flight otherwise.
+    pub wind_est: [f64; 2],
 }
 
 /// Exact state, for ideal mode.
@@ -40,6 +42,7 @@ pub fn nav_from_truth(tr: &Truth, wind: &Wind, af: V3) -> Nav {
         low: tr.lowest(),
         on_ground: tr.on_feet(),
         wind: Some([w[0], w[1]]),
+        wind_est: [w[0], w[1]],
     }
 }
 
@@ -66,6 +69,7 @@ pub struct Estimator {
     baro_ref: f64,
     baro_init: u32,
     thr_est: f64,
+    wind_est: [f64; 2],
 }
 
 impl Estimator {
@@ -75,7 +79,7 @@ impl Estimator {
             q: tr.q, p: tr.p, v: tr.v, gyro_bias: [0.0; 3], w: [0.0; 3], af: [0.0; 3],
             hist: [(tr.p, tr.v); HIST], cum: [[0.0; 3]; HIST], acc_sum: [0.0; 3], last_gps_v: None, att_corr: [0.0; 3],
             hi: 0, pitot: 0.0, lidar: None, lidar_age: 1.0,
-            baro_ref: 0.0, baro_init: 0, thr_est: 0.0,
+            baro_ref: 0.0, baro_init: 0, thr_est: 0.0, wind_est: [0.0; 2],
         }
     }
 
@@ -176,10 +180,16 @@ impl Estimator {
         let air = max(vax, 0.0);
         // lateral accelerometer as the sideslip proxy (no sideslip vane on a foamie)
         let slip = clamp(-m.acc[1] * 4.3 / max(25.0, air * air), -0.5, 0.5);
+        // wind = ground velocity minus air velocity (pitot along the nose), only in steady wing-borne flight
+        let xb = qrot(self.q, [1.0, 0.0, 0.0]);
+        if vax > 8.0 && abs(xb[2]) < 0.35 {
+            let k = min(1.0, dt / 6.0);
+            for i in 0..2 { self.wind_est[i] += (self.v[i] - vax * xb[i] - self.wind_est[i]) * k; }
+        }
         let on_ground = agl_tail < 0.07 && abs(self.v[2]) < 0.6 && len2([self.v[0], self.v[1]]) < 0.8;
         Nav {
             p: self.p, v: self.v, q: self.q, w: self.w, af: self.af,
-            vax, air, vi, slip, agl_tail, low, on_ground, wind: wind_hint,
+            vax, air, vi, slip, agl_tail, low, on_ground, wind: wind_hint, wind_est: self.wind_est,
         }
     }
 }

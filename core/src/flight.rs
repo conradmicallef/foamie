@@ -43,7 +43,7 @@ impl Sticks {
 }
 
 #[derive(Clone, Copy, Default)]
-pub struct Integrators { pub p: f64, pub q: f64, pub r: f64, pub h: f64, pub v: f64, pub vx: f64, pub vy: f64 }
+pub struct Integrators { pub p: f64, pub q: f64, pub r: f64, pub h: f64, pub v: f64, pub vx: f64, pub vy: f64, pub att: V3 }
 
 // ---- landing pad, circuit and tuning
 pub const CIRC_ALT: f64 = 20.0;
@@ -137,7 +137,11 @@ impl Fc {
         let sv = sqrt(qe[1] * qe[1] + qe[2] * qe[2] + qe[3] * qe[3]);
         let ang = 2.0 * atan2(sv, qe[0]);
         let e = if sv > 1e-6 { [qe[1] / sv * ang, qe[2] / sv * ang, qe[3] / sv * ang] } else { [0.0; 3] };
-        self.rate_loop(clamp(k * e[0] + ff[0], -5.0, 5.0), clamp(-k * e[1] + ff[1], -5.0, 5.0), clamp(-k * e[2] + ff[2], -5.0, 5.0), dt);
+        // integral on attitude error: holds steady offsets such as knife-edge sideslip or an out-of-trim airframe
+        let ia = &mut self.i.att;
+        for j in 0..3 { ia[j] = clamp(ia[j] + 2.5 * e[j] * dt, -1.2, 1.2); }
+        let ia = self.i.att;
+        self.rate_loop(clamp(k * e[0] + ia[0] + ff[0], -5.0, 5.0), clamp(-k * e[1] - ia[1] + ff[1], -5.0, 5.0), clamp(-k * e[2] - ia[2] + ff[2], -5.0, 5.0), dt);
     }
 
     /// Heading to fly: the nose direction, or the belly direction when the nose is near vertical.

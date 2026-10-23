@@ -60,7 +60,10 @@ fn loiter_drift(real: bool, wind: usize, spin: bool) -> f64 {
 fn qloiter_holds_position_in_wind_even_after_spinning_broadside() {
     for wind in [1, 2] { for spin in [false, true] {
         assert!(loiter_drift(false, wind, spin) < 1.0);
-        assert!(loiter_drift(true, wind, spin) < 3.0);
+        // real plane: GPS-limited at 2 m/s; at 4 m/s gusting 6.6 m/s the profile fuselage slab catches nearly as much
+        // side force as the tilted thrust can resist (as on a real 3D foamie), so allow it to give a few metres
+        let real = loiter_drift(true, wind, spin);
+        assert!(real < if wind == 1 { 2.0 } else { 7.0 }, "real-plane drift {real:.1} m in wind level {wind}");
     }}
 }
 
@@ -127,40 +130,62 @@ fn fbwa_levels_hands_off_and_transitions_from_hover() {
     assert!(!s.crashed);
 }
 
-fn show(real: bool, fig: Option<foamie_core::aerobatics::Fig>, seed: u64) -> (bool, usize, usize, f64) {
+/// Fly a show (or one figure). Returns (crashed, figures started, recoveries, lowest point, worst centring error,
+/// share of figures entered heading east).
+fn show(real: bool, wind: usize, fig: Option<foamie_core::aerobatics::Fig>, seed: u64) -> (bool, usize, usize, f64, f64, f64) {
+    use foamie_core::aerobatics::CENTRE;
     let mut s = Sim::new(seed);
     if real { s.set_real(true); }
+    s.set_wind(wind);
     s.start_auto(Task::Takeoff);
     run(&mut s, 16.0);
     events(&mut s);
     s.start_show(fig);
-    let (mut figs, mut rec, mut low) = (0, 0, f64::INFINITY);
-    for _ in 0..(150.0 / 0.002) as usize {
+    let (mut figs, mut rec, mut low, mut worst_c, mut east) = (0, 0, f64::INFINITY, 0.0f64, 0.0);
+    let (mut xmin, mut xmax, mut in_fig) = (0.0f64, 0.0f64, false);
+    for _ in 0..(400.0 / 0.002) as usize {
         s.step();
-        low = low.min(s.truth.lowest());
-        for e in events(&mut s) { match e.0 { Ev::FigureStarted => figs += 1, Ev::Recovery => rec += 1, _ => {} } }
-        if s.crashed || s.auto.map_or(true, |a| a.task != Task::Show) { break; }
+        if in_fig { low = low.min(s.truth.lowest()); xmin = xmin.min(s.truth.p[0]); xmax = xmax.max(s.truth.p[0]); }
+        for e in events(&mut s) {
+            match e.0 {
+                Ev::FigureStarted => { figs += 1; in_fig = true; xmin = 1e9; xmax = -1e9; if s.truth.v[0] > 0.0 { east += 1.0; } }
+                Ev::FigureDone | Ev::ShowDone => { if in_fig { worst_c = worst_c.max(((xmin + xmax) / 2.0 - CENTRE[0]).abs()); } in_fig = false; }
+                Ev::Recovery => { rec += 1; in_fig = false; }
+                _ => {}
+            }
+        }
+        if s.crashed || s.auto.map_or(true, |a| a.task == Task::Circuit) { break; }
     }
-    (s.crashed, figs, rec, low)
+    (s.crashed, figs, rec, low, worst_c, east / figs.max(1) as f64)
 }
 
 #[test]
-fn every_aerobatic_figure_flies_cleanly() {
+fn every_aerobatic_figure_flies_cleanly_and_centred() {
     for f in 1..=8 {
         let fig = foamie_core::aerobatics::Fig::from(f).unwrap();
-        let (crashed, figs, rec, low) = show(false, Some(fig), 40 + f as u64);
+        let (crashed, figs, rec, low, centre, _) = show(false, 0, Some(fig), 40 + f as u64);
         assert!(!crashed && figs == 1 && rec == 0, "{fig:?}: crashed {crashed}, recoveries {rec}");
-        assert!(low > 8.0, "{fig:?} got down to {low:.1} m");
+        assert!(low > 10.0, "{fig:?} got down to {low:.1} m");
+        assert!(centre < 3.0, "{fig:?} centred {centre:.1} m off show centre");
     }
 }
 
 #[test]
 fn full_aerobatic_show_ideal_and_real() {
     for real in [false, true] {
-        let (crashed, figs, _, _) = show(real, None, 77);
+        let (crashed, figs, rec, _, _, _) = show(real, 0, None, 77);
         assert!(!crashed, "real = {real}");
         assert_eq!(figs, 8, "all eight figures (real = {real})");
+        if !real { assert_eq!(rec, 0, "no recovery needed in calm air"); }
     }
+}
+
+#[test]
+fn figures_enter_into_wind_and_show_survives_gusts() {
+    // wind from the east: every figure starts heading east; recoveries may abandon a figure, never the aircraft
+    let (crashed, figs, _, _, _, east) = show(false, 2, None, 78);
+    assert!(!crashed && figs == 8);
+    assert!(east > 0.99, "into wind: {east}");
 }
 
 #[test]
@@ -168,6 +193,28 @@ fn show_from_the_pad_takes_off_first() {
     let mut s = Sim::new(3);
     s.start_show(Some(foamie_core::aerobatics::Fig::Loop));
     let mut started = false;
-    for _ in 0..(40.0 / 0.002) as usize { s.step(); if events(&mut s).iter().any(|e| e.0 == Ev::FigureStarted) { started = true; break; } }
+    for _ in 0..(90.0 / 0.002) as usize { s.step(); if events(&mut s).iter().any(|e| e.0 == Ev::FigureStarted) { started = true; break; } }
     assert!(started && !s.crashed);
+}
+
+#[test]
+fn ekf_estimate_is_accurate_in_hover_and_manoeuvres() {
+    use foamie_core::math::*;
+    let (mut att, mut vel, mut n, mut worst) = (0.0, 0.0, 0.0, 0.0f64);
+    let mut s = Sim::new(12);
+    s.set_real(true); s.set_wind(1);
+    s.start_auto(Task::Takeoff);
+    for i in 0..(60.0 / 0.002) as usize {
+        s.step();
+        if i == 15_000 { s.start_show(Some(foamie_core::aerobatics::Fig::Loop)); }
+        if i % 10 == 0 {
+            let e = qmul(conj(s.nav().q), s.truth.q);
+            let a = 2.0 * atan2((e[1] * e[1] + e[2] * e[2] + e[3] * e[3]).sqrt(), e[0].abs()) / D2R;
+            att += a * a; worst = worst.max(a); vel += len(sub(s.nav().v, s.truth.v)).powi(2); n += 1.0;
+        }
+    }
+    assert!(!s.crashed);
+    assert!((att / n).sqrt() < 1.5, "attitude rms {:.2}°", (att / n).sqrt());
+    assert!(worst < 6.0, "attitude worst {worst:.1}°");
+    assert!((vel / n).sqrt() < 0.25, "velocity rms {:.2} m/s", (vel / n).sqrt());
 }

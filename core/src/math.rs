@@ -113,3 +113,23 @@ impl Rng {
     }
     pub fn gauss3(&mut self, s: f64) -> V3 { [self.gauss() * s, self.gauss() * s, self.gauss() * s] }
 }
+
+/// Quaternion from body axes expressed in the world frame (columns of the rotation matrix).
+pub fn quat_from_axes(x: V3, y: V3, z: V3) -> Q {
+    let (m00, m11, m22) = (x[0], y[1], z[2]);
+    let tr = m00 + m11 + m22;
+    let q = if tr > 0.0 {
+        let s = sqrt(tr + 1.0) * 2.0;
+        [0.25 * s, (y[2] - z[1]) / s, (z[0] - x[2]) / s, (x[1] - y[0]) / s]
+    } else if m00 > m11 && m00 > m22 {
+        let s = sqrt(1.0 + m00 - m11 - m22) * 2.0;
+        [(y[2] - z[1]) / s, 0.25 * s, (y[0] + x[1]) / s, (z[0] + x[2]) / s]
+    } else if m11 > m22 {
+        let s = sqrt(1.0 + m11 - m00 - m22) * 2.0;
+        [(z[0] - x[2]) / s, (y[0] + x[1]) / s, 0.25 * s, (z[1] + y[2]) / s]
+    } else {
+        let s = sqrt(1.0 + m22 - m00 - m11) * 2.0;
+        [(x[1] - y[0]) / s, (z[0] + x[2]) / s, (z[1] + y[2]) / s, 0.25 * s]
+    };
+    qnorm(q)
+}

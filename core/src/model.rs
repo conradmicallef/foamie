@@ -25,7 +25,8 @@ pub const SURF: [Surf; 5] = [
     Surf { r: [0.0, -0.23, 0.0], s: 0.095, n: [0.0, 0.0, 1.0], a: 4.3, stall: 0.28, wash: 0.4, tau: 0.45, ctl: Ctl::AilR, ar: 4.3 },
     Surf { r: [-0.6, 0.0, 0.0], s: 0.05, n: [0.0, 0.0, 1.0], a: 3.8, stall: 0.45, wash: 1.0, tau: 0.8, ctl: Ctl::Elev, ar: 3.0 },
     Surf { r: [-0.62, 0.0, 0.07], s: 0.04, n: [0.0, 1.0, 0.0], a: 2.8, stall: 0.5, wash: 0.95, tau: 0.8, ctl: Ctl::Rud, ar: 1.6 },
-    Surf { r: [-0.08, 0.0, 0.0], s: 0.035, n: [0.0, 1.0, 0.0], a: 1.8, stall: 0.45, wash: 0.5, tau: 0.0, ctl: Ctl::None, ar: 1.0 },
+    // profile fuselage: a 3D foamie's big slab side is what lets it hang at knife-edge
+    Surf { r: [-0.08, 0.0, 0.0], s: 0.06, n: [0.0, 1.0, 0.0], a: 1.8, stall: 0.45, wash: 0.5, tau: 0.0, ctl: Ctl::None, ar: 1.0 },
 ];
 
 pub const LEG: f64 = 0.22;

@@ -10,8 +10,8 @@ const MODE_NAME: Record<Mode, string> = { [Mode.Manual]: 'Manual', [Mode.Fbwa]: 
 const MODE_ATTR: Record<string, Mode> = { MANUAL: Mode.Manual, FBWA: Mode.Fbwa, ACRO: Mode.Acro, QSTAB: Mode.QStab, QHOVER: Mode.QHover, QLOITER: Mode.QLoiter };
 const TASK_NAME: Record<number, string> = { [Task.Takeoff]: 'takeoff', [Task.Circuit]: 'circuit', [Task.Land]: 'land', [Task.Recover]: 'recovery', [Task.Show]: 'show' };
 const FIG: Record<number, [string, string]> = {
-  1: ['Loop', 'Full-power pull through 360°, an 18 m circle'],
-  2: ['Axial roll', 'Nose slightly up, one roll at 230°/s'],
+  1: ['Loop', 'A true 18 m circle, tracked against the ground'],
+  2: ['Axial roll', 'One roll on a straight line, top rudder through knife-edge'],
   3: ['4-point roll', 'Roll in four 90° steps with a crisp pause at each'],
   4: ['Immelmann', 'Half loop up, half roll on top: reverses and climbs'],
   5: ['Split-S', 'Half roll inverted, half loop down: reverses and descends'],
@@ -35,7 +35,7 @@ const HINTS: Record<string, string> = {
   takeoff: 'Auto takeoff: vertical climb to 8 m, pitch over along the belly, then join the circuit.',
   circuit: 'Circuit: anticlockwise racetrack round the pad at 20 m and 13 m/s. Move any stick to take over.',
   land: 'Auto land: straight in at 9 m, pull vertical at the braking point, brake onto the pad, descend fast then 0.45 m/s for the last metre.',
-  show: 'Aerobatics: the autopilot flies each figure on the same attitude controller as FBWA, following a reference attitude that turns at fixed rates. It climbs to a safe height first and rejoins the circuit after. Move a stick to take over.',
+  show: 'Aerobatics: each figure is a real path (lines, circles, rolls on lines) centred on the show centre in front of you and entered into the wind. Before each one the plane flies out, turns back and lines up on the entry gate. Recovery stays armed. Move a stick to take over.',
   recovery: 'Recovery: ground impact was predicted sooner than the plane can stop the sink. Pulling out at full power; control returns once it is safe and the sticks are centred.',
   real: 'Real plane: the autopilot now flies on simulated sensors (noisy, delayed GPS, drifting baro, vibrating IMU, tail lidar, pitot) through a state estimator. The cyan cross is where it thinks it is. This airframe also has small build errors and a 3S 1000 mAh battery.',
 };
@@ -127,7 +127,8 @@ function onEvent(e: Event) {
     case Ev.ModeChanged: showHint(String(e.a)); break;
     case Ev.BatteryLow: toast('Battery low', `${e.a.toFixed(1)} V under load. Land now: hovering takes a lot of power.`, 'bad', 4000); break;
     case Ev.FigureStarted: { const [n, d] = FIG[e.a] ?? ['Figure', '']; toast(e.c > 1 ? `${n} · ${e.b}/${e.c}` : n, d, '', 2600); break; }
-    case Ev.ShowDone: toast('Show complete', `Eight figures flown · rejoining the circuit at ${e.b.toFixed(0)} m`, 'ok', 3200); break;
+    case Ev.FigureDone: toast(`${FIG[e.a]?.[0] ?? 'Figure'} done`, `on the path within ${e.b.toFixed(1)} m RMS · worst ${e.c.toFixed(1)} m`, 'ok', 2400); break;
+    case Ev.ShowDone: toast('Show complete', `last figure within ${e.b.toFixed(1)} m RMS · rejoining the circuit at ${e.d.toFixed(0)} m`, 'ok', 3200); break;
     case Ev.BatteryEmpty: toast('Battery empty', 'Thrust is fading. It will not hover much longer.', 'bad', 4000); break;
   }
 }
@@ -162,7 +163,11 @@ function hud(st: State, now: number) {
   }
   let txt: string, k: string;
   if (st.crashed) { txt = 'Crashed'; k = 'bad'; }
-  else if (st.task === Task.Show) { txt = st.figure ? `Aerobatics · ${FIG[st.figure][0]}${st.showLength > 1 ? ` (${st.figureIndex + 1}/${st.showLength})` : ''}` : 'Aerobatics · climbing to a safe height'; k = 'auto'; }
+  else if (st.task === Task.Show) {
+    const name = FIG[st.figure]?.[0] ?? 'figure', of = st.showLength > 1 ? ` (${st.figureIndex + 1}/${st.showLength})` : '';
+    txt = st.showStage === 2 ? `Aerobatics · ${name}${of}` : `Aerobatics · positioning for ${name}${of}, into wind`;
+    k = 'auto';
+  }
   else if (st.task !== Task.None) { txt = `Auto ${TASK_NAME[st.task]} · ${PHASE_TXT[st.phase] ?? ''}`; k = 'auto'; }
   else if (st.onGround && !st.airborne) { txt = `${MODE_NAME[st.mode]} · on the legs${Math.hypot(st.p[0], st.p[1]) < 1.5 ? ', on the pad' : ''}`; k = 'ok'; }
   else { txt = `${MODE_NAME[st.mode]} · ${X[2] > 0.8 ? 'hovering' : 'wing-borne'}`; k = ''; }
