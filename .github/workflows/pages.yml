@@ -1,0 +1,32 @@
+# Build the Rust core to WebAssembly, bundle the TypeScript front end and publish web/dist to the gh-pages branch.
+name: Publish to gh-pages
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust with the wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+      - name: Test the flight core
+        run: cargo test --release --manifest-path core/Cargo.toml
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build the page
+        working-directory: web
+        run: npm ci && npm run typecheck && npm run build
+      - name: Push web/dist to gh-pages
+        run: |
+          cd web/dist
+          rm -f embed.html
+          touch .nojekyll
+          git init -q -b gh-pages
+          git add -A
+          git -c user.name="github-actions" -c user.email="github-actions@users.noreply.github.com" commit -qm "Publish ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" gh-pages

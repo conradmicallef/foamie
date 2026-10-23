@@ -1,0 +1,191 @@
+<title>3D Foamie Hover Sim</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=Saira+Semi+Condensed:wght@500;600;700&display=swap">
+<style>
+/* Layout: full-bleed 3D canvas; instrument strip across the top; two transmitter sticks in the bottom corners. */
+:root {
+  --scene: #3d5a34;
+  --panel: rgba(13, 17, 21, 0.62);
+  --panel-solid: #12171c;
+  --line: rgba(236, 241, 235, 0.14);
+  --ink: #f1f4ef;
+  --muted: #a7b2ab;
+  --accent: #ff8a2a;
+  --ok: #72e392;
+  --warn: #ffd25e;
+  --bad: #ff6a58;
+  --f-ui: "Saira Semi Condensed", "Arial Narrow", system-ui, sans-serif;
+  --f-num: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  --stick: min(36vmin, 156px);
+  color-scheme: dark;
+}
+html, body { height: 100%; overflow: hidden; }
+body {
+  background: var(--scene); color: var(--ink); font-family: var(--f-ui);
+  touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+  overscroll-behavior: none;
+}
+#app { position: fixed; inset: 0; }
+#cv { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+.top {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 2;
+  padding-top: calc(env(safe-area-inset-top, 0px) + 10px);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; justify-content: space-between;
+  pointer-events: none;
+}
+.top > * { pointer-events: auto; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+
+.metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); min-width: 0; overflow: hidden; }
+.tile { padding: 4px 9px 5px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); min-width: 64px; }
+.tile:nth-child(4n) { border-right: 0; }
+.tile:nth-child(n+5) { border-bottom: 0; }
+.tile .k { font-size: 10px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.tile .v { font-family: var(--f-num); font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.15; white-space: nowrap; }
+.tile .v small { font-size: 10px; color: var(--muted); margin-left: 2px; font-weight: 500; }
+.tile.warn .v { color: var(--warn); }
+.tile.hot .v { color: var(--ok); }
+
+.status { grid-column: 1 / -1; padding: 5px 9px; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; display: flex; gap: 8px; align-items: center; border-top: 1px solid var(--line); }
+.status .eng { margin-left: auto; color: var(--muted); font-weight: 500; font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; }
+.status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.status[data-k="auto"] .dot { background: var(--accent); }
+.status[data-k="ok"] .dot { background: var(--ok); }
+.status[data-k="bad"] .dot { background: var(--bad); }
+
+.ctl { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; margin-left: auto; }
+.row { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.seg { display: flex; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; border-right: 1px solid var(--line); background: transparent; }
+.seg button:last-child { border-right: 0; }
+button {
+  font-family: var(--f-ui); font-size: 12.5px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase;
+  color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+  padding: 7px 10px; min-height: 34px; cursor: pointer; touch-action: manipulation;
+}
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+button[aria-pressed="true"] { color: var(--panel-solid); background: var(--ink); }
+#btReal[aria-pressed="true"] { background: #38e0ff; color: var(--panel-solid); }
+.auto button[aria-pressed="true"] { background: var(--accent); color: var(--panel-solid); }
+.auto button { border-color: rgba(255, 138, 42, 0.45); }
+
+.hint { flex-basis: 100%; font-size: 12px; color: var(--ink); opacity: 0.92; text-shadow: 0 1px 2px rgba(0,0,0,.6); max-width: 60ch; line-height: 1.35; transition: opacity .6s; pointer-events: none; }
+.hint.fade { opacity: 0; }
+
+.stick {
+  position: fixed; z-index: 2; width: var(--stick); height: var(--stick);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 22px);
+  border-radius: 50%; border: 1.5px solid rgba(241, 244, 239, 0.38); background: rgba(10, 14, 18, 0.26);
+  touch-action: none;
+}
+#stL { left: max(16px, calc(env(safe-area-inset-left, 0px) + 8px)); }
+#stR { right: max(16px, calc(env(safe-area-inset-right, 0px) + 8px)); }
+.stick::before, .stick::after { content: ""; position: absolute; background: rgba(241, 244, 239, 0.18); }
+.stick::before { left: 50%; top: 12%; bottom: 12%; width: 1px; }
+.stick::after { top: 50%; left: 12%; right: 12%; height: 1px; }
+.knob {
+  position: absolute; left: 50%; top: 50%; width: 42%; height: 42%; margin: -21% 0 0 -21%;
+  border-radius: 50%; background: rgba(18, 23, 28, 0.7); border: 2px solid var(--accent);
+  box-shadow: 0 2px 8px rgba(0,0,0,.35); pointer-events: none; will-change: transform;
+}
+.stick .lbl { position: absolute; left: 0; right: 0; bottom: -17px; text-align: center; font-size: 10px; font-weight: 700; letter-spacing: 0.12em; color: var(--ink); text-shadow: 0 1px 2px rgba(0,0,0,.7); text-transform: uppercase; }
+.thrbar { position: absolute; left: -9px; top: 12%; bottom: 12%; width: 4px; border-radius: 2px; background: rgba(241,244,239,.2); overflow: hidden; }
+.thrbar i { position: absolute; left: 0; right: 0; bottom: 0; background: var(--accent); height: 0; }
+
+#warn {
+  position: fixed; z-index: 3; left: 50%; transform: translateX(-50%);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 22px + var(--stick) * 0.5);
+  padding: 6px 12px; border-radius: 6px; background: var(--bad); color: #1a0d0b;
+  font-family: var(--f-num); font-size: 13px; font-weight: 600; letter-spacing: 0.02em; white-space: nowrap;
+  box-shadow: 0 2px 10px rgba(0,0,0,.35); pointer-events: none;
+}
+#warn.caution { background: var(--warn); }
+#toast {
+  position: fixed; z-index: 3; left: 50%; top: 44%; transform: translate(-50%, -50%);
+  padding: 10px 16px; max-width: min(88vw, 420px); text-align: center; transition: opacity .3s;
+}
+#toast h2 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: 0.04em; text-wrap: balance; }
+#toast p { margin: 4px 0 0; font-size: 13px; color: var(--muted); font-family: var(--f-num); }
+#toast.ok h2 { color: var(--ok); }
+#toast.bad h2 { color: var(--bad); }
+
+@media (max-width: 520px) {
+  .metrics { flex: 1 1 100%; }
+  .ctl { align-items: stretch; flex: 1 1 100%; }
+  .row { justify-content: flex-start; }
+  button { padding: 6px 8px; font-size: 11.5px; }
+  .tile { min-width: 0; }
+}
+@media (max-height: 420px) and (orientation: landscape) {
+  .tile .v { font-size: 13px; }
+  button { min-height: 30px; padding: 5px 8px; }
+}
+@media (prefers-reduced-motion: reduce) { .hint, #warn {
+  position: fixed; z-index: 3; left: 50%; transform: translateX(-50%);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 22px + var(--stick) * 0.5);
+  padding: 6px 12px; border-radius: 6px; background: var(--bad); color: #1a0d0b;
+  font-family: var(--f-num); font-size: 13px; font-weight: 600; letter-spacing: 0.02em; white-space: nowrap;
+  box-shadow: 0 2px 10px rgba(0,0,0,.35); pointer-events: none;
+}
+#warn.caution { background: var(--warn); }
+#toast { transition: none; } }
+</style>
+
+<div id="app">
+  <canvas id="cv" aria-label="3D view of the flying field and the aircraft"></canvas>
+
+  <div class="top">
+    <div class="metrics panel" id="metrics">
+      <div class="tile" id="mAlt"><div class="k">Alt</div><div class="v">0.0<small>m</small></div></div>
+      <div class="tile" id="mAir"><div class="k">Airspeed</div><div class="v">0.0<small>m/s</small></div></div>
+      <div class="tile" id="mVs"><div class="k">V/S</div><div class="v">0.0<small>m/s</small></div></div>
+      <div class="tile" id="mNose"><div class="k">Nose</div><div class="v">90<small>°</small></div></div>
+      <div class="tile" id="mThr"><div class="k">Throttle</div><div class="v">0<small>%</small></div></div>
+      <div class="tile" id="mTw"><div class="k">Thrust/W</div><div class="v">0.00</div></div>
+      <div class="tile" id="mAoa"><div class="k">AoA</div><div class="v">0<small>°</small></div></div>
+      <div class="tile" id="mWash"><div class="k">Prop wash</div><div class="v">0.0<small>m/s</small></div></div>
+      <div class="status" id="status"><span class="dot"></span><span id="statusTxt">Loading flight core…</span><span class="eng" id="engine"></span></div>
+    </div>
+
+    <div class="ctl">
+      <div class="row">
+        <div class="seg panel" role="group" aria-label="Wing-borne modes">
+          <button data-mode="MANUAL">Manual</button>
+          <button data-mode="FBWA">FBWA</button>
+          <button data-mode="ACRO">Acro</button>
+        </div>
+        <div class="seg panel" role="group" aria-label="Hover modes">
+          <button data-mode="QSTAB">QStab</button>
+          <button data-mode="QHOVER">QHover</button>
+          <button data-mode="QLOITER">QLoiter</button>
+        </div>
+      </div>
+      <div class="row auto">
+        <button id="btTakeoff">Takeoff</button>
+        <button id="btCircuit">Circuit</button>
+        <button id="btLand">Land</button>
+      </div>
+      <div class="row">
+        <button id="btView">View: Pilot</button>
+        <button id="btWind">Wind 0</button>
+        <button id="btSmoke" aria-pressed="false">Smoke</button>
+        <button id="btRecov" aria-pressed="true">Recovery</button>
+        <button id="btVane" aria-pressed="true">Weathervane</button>
+        <button id="btReal" aria-pressed="false">Real plane</button>
+        <button id="btReset">Reset</button>
+      </div>
+    </div>
+    <div class="hint" id="hint"></div>
+  </div>
+
+  <div class="stick" id="stL"><div class="thrbar"><i id="thrFill"></i></div><div class="knob"></div><span class="lbl" id="lblL">Throttle · Yaw</span></div>
+  <div class="stick" id="stR"><div class="knob"></div><span class="lbl" id="lblR">Pitch · Roll</span></div>
+
+  <div id="warn" hidden><span id="warnTxt"></span></div>
+  <div id="toast" class="panel" hidden><h2 id="toastH"></h2><p id="toastP"></p></div>
+</div>
+<script>/*BUNDLE*/</script>

@@ -1,0 +1,4 @@
+core/target/
+web/node_modules/
+web/gen/
+web/dist/

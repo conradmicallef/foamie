@@ -1,0 +1,22 @@
+[package]
+name = "foamie-core"
+version = "0.1.0"
+edition = "2021"
+description = "Flight core for the 3D foamie tail-sitter sim: physics, sensors, estimator, flight modes and autopilot."
+license = "GPL-3.0-or-later"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+libm = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = true
+panic = "abort"
+codegen-units = 1
+
+[profile.dev]
+panic = "abort"
+opt-level = 2
