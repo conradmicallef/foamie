@@ -19,16 +19,20 @@ impl Mode {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
-pub enum Task { Takeoff = 1, Circuit = 2, Land = 3, Recover = 4 }
+pub enum Task { Takeoff = 1, Circuit = 2, Land = 3, Recover = 4, Show = 5 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
-pub enum Phase { Lift = 1, PitchOver = 2, Fly = 3, Approach = 4, Pullup = 5, Brake = 6, Descend = 7, Pull = 8, HoverUp = 9, Hold = 10 }
+pub enum Phase { Lift = 1, PitchOver = 2, Fly = 3, Approach = 4, Pullup = 5, Brake = 6, Descend = 7, Pull = 8, HoverUp = 9, Hold = 10, Show = 11 }
 
 #[derive(Clone, Copy)]
 pub struct Auto {
     pub task: Task, pub phase: Phase, pub t: f64,
     pub hd: [f64; 2], pub ly0: f64, pub back: Mode, pub wing: bool, pub c: f64,
+    /// Aerobatic show progress (used by `Task::Show`).
+    pub show: crate::aerobatics::Show,
+    /// A show to start once a takeoff from the ground has pitched over.
+    pub then_show: Option<crate::aerobatics::Show>,
 }
 
 #[derive(Clone, Copy, Default)]

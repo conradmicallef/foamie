@@ -14,6 +14,7 @@ A mobile flight simulator for a high-powered 3D foam plane that takes off and la
   - **QHover** – QStabilize plus height hold (left stick = climb rate).
   - **QLoiter** – position hold over the ground; stick moves the hover.
 - **Autopilot buttons:** **Takeoff** (vertical climb, pitch-over, joins the circuit), **Circuit** (racetrack round the pad at 20 m), **Land** (straight in, pull vertical to brake, descend onto the legs). Moving a stick takes over.
+- **Aerobatics (Show button):** the full show — loop, Immelmann, axial roll, split-S, four-point roll, hammerhead, Cuban eight and a prop-hang torque roll — or any single figure. Each figure is a short program of pulls, rolls and pivots: a reference attitude turns at fixed body rates and the quaternion attitude controller follows it, so the geometry holds inverted and vertical too. The autopilot climbs to the figure's safe height first, recovery stays armed, and it rejoins the circuit afterwards (`core/src/aerobatics.rs`).
 - **Recovery:** predicts ground impact up to 10 s ahead along the curved flight path and pulls out automatically when the time left is shorter than this airframe needs to stop the sink.
 - **Weathervane:** in QHover/QLoiter the plane turns its wing edge-on to the wind when you leave the yaw stick centred (like ArduPilot's `Q_WVANE_GAIN`); broadside, the wing catches too much wind to hold position.
 - **Real plane:** flies the same software on simulated sensors instead of perfect knowledge — see below.
@@ -45,6 +46,7 @@ The flight controller sees only an estimate built from those sensors (`core/src/
 | QLoiter in 2–4 m/s gusts: mean drift | 0.33 m | 1.1 m |
 | Recovery: full-down dive, inverted motor-off | saved | saved |
 | Recovery false alarms: split-S, FBWA cruise, hover landing | none | none |
+| Aerobatic show: 8 figures, no recovery needed | ✓ | ✓ |
 
 For centimetre landings on a real airframe you would add RTK GPS, optical flow, or a precision-landing beacon.
 
@@ -59,7 +61,8 @@ core/                 Rust flight core (no_std, compiles to wasm32)
   src/sim.rs          the simulation loop, autopilot tasks, touchdown scoring, events
   src/lib.rs          C-ABI exports and the state buffer read by the front end
   tests/scenarios.rs  flight scenarios that must keep working
-  examples/bench.rs   the benchmark above; examples/diag.rs estimator accuracy
+  src/aerobatics.rs   aerobatic figures and the show sequence
+  examples/bench.rs   the benchmark above; examples/show.rs each figure; examples/diag.rs estimator accuracy
 web/                  TypeScript front end
   src/core.ts         loads the core (WebAssembly, or its wasm2js build if a page forbids WebAssembly)
   src/render.ts       3D view on a 2D canvas

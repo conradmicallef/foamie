@@ -20,13 +20,14 @@ interface Exports {
 }
 
 export const enum Mode { Manual = 0, Fbwa = 1, Acro = 2, QStab = 3, QHover = 4, QLoiter = 5 }
-export const enum Task { None = 0, Takeoff = 1, Circuit = 2, Land = 3, Recover = 4 }
+export const enum Task { None = 0, Takeoff = 1, Circuit = 2, Land = 3, Recover = 4, Show = 5 }
 export const enum Ev {
   TakeoffDone = 1, YouHaveControl = 2, TailLanding = 3, HardTail = 4, Belly = 5, Touched = 6, Crash = 7,
   Recovery = 8, PulledOut = 9, Recovered = 10, StickLy = 11, ModeChanged = 12, BatteryLow = 13, BatteryEmpty = 14,
+  FigureStarted = 15, FigureDone = 16, ShowDone = 17,
 }
 export const enum Opt { Wind = 1, Recovery = 2, Weathervane = 3, RealPlane = 4 }
-export const enum Cmd { Takeoff = 1, Circuit = 2, Land = 3 }
+export const enum Cmd { Takeoff = 1, Circuit = 2, Land = 3, Show = 4 }
 
 export interface Event { code: Ev; a: number; b: number; c: number; d: number }
 
@@ -73,6 +74,10 @@ export class State {
   get thrustToWeight() { return this.s[57]; }
   get navVz() { return this.s[58]; }
   get battery() { return this.s[59] !== 0; }
+  /** Aerobatic figure being flown (1–8, 0 = none), its index in the show and the show length. */
+  get figure() { return this.s[60]; }
+  get figureIndex() { return this.s[61]; }
+  get showLength() { return this.s[62]; }
 }
 
 export class Core {
@@ -97,6 +102,8 @@ export class Core {
   sticks(rx: number, ry: number, lx: number, ly: number, lActive: boolean) { this.x.fz_set_sticks(rx, ry, lx, ly, lActive ? 1 : 0); }
   setMode(m: Mode) { this.x.fz_set_mode(m); }
   cmd(c: Cmd) { this.x.fz_cmd(c); }
+  /** Fly one aerobatic figure (1–8), or the whole show with 0. */
+  figure(f: number) { this.x.fz_cmd(f === 0 ? Cmd.Show : 10 + f); }
   opt(id: Opt, v: number | boolean) { this.x.fz_set_opt(id, typeof v === 'boolean' ? (v ? 1 : 0) : v); }
   advance(ft: number) { this.x.fz_advance(ft); }
 

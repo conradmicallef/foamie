@@ -96,6 +96,16 @@ button[aria-pressed="true"] { color: var(--panel-solid); background: var(--ink);
 .thrbar { position: absolute; left: -9px; top: 12%; bottom: 12%; width: 4px; border-radius: 2px; background: rgba(241,244,239,.2); overflow: hidden; }
 .thrbar i { position: absolute; left: 0; right: 0; bottom: 0; background: var(--accent); height: 0; }
 
+#showPick {
+  position: fixed; z-index: 4; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: min(92vw, 360px); padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 8px;
+}
+.pickHead { display: flex; align-items: center; justify-content: space-between; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; font-size: 13px; }
+.pickHead button { min-height: 30px; padding: 4px 10px; }
+.pickAll { background: var(--accent); color: var(--panel-solid); border-color: var(--accent); }
+.pickGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.pickGrid button { text-transform: none; letter-spacing: 0.02em; font-size: 13px; }
+.pickNote { margin: 2px 0 0; font-size: 11.5px; color: var(--muted); line-height: 1.35; }
 #warn {
   position: fixed; z-index: 3; left: 50%; transform: translateX(-50%);
   bottom: calc(env(safe-area-inset-bottom, 0px) + 22px + var(--stick) * 0.5);
@@ -168,6 +178,7 @@ button[aria-pressed="true"] { color: var(--panel-solid); background: var(--ink);
         <button id="btTakeoff">Takeoff</button>
         <button id="btCircuit">Circuit</button>
         <button id="btLand">Land</button>
+        <button id="btShow" aria-haspopup="dialog" aria-expanded="false">Show</button>
       </div>
       <div class="row">
         <button id="btView">View: Pilot</button>
@@ -185,6 +196,21 @@ button[aria-pressed="true"] { color: var(--panel-solid); background: var(--ink);
   <div class="stick" id="stL"><div class="thrbar"><i id="thrFill"></i></div><div class="knob"></div><span class="lbl" id="lblL">Throttle · Yaw</span></div>
   <div class="stick" id="stR"><div class="knob"></div><span class="lbl" id="lblR">Pitch · Roll</span></div>
 
+  <div id="showPick" class="panel" role="dialog" aria-label="Aerobatics" hidden>
+    <div class="pickHead"><span>Aerobatics</span><button id="pickClose" aria-label="Close">✕</button></div>
+    <button class="pickAll" data-fig="0">Full show · 8 figures</button>
+    <div class="pickGrid">
+      <button data-fig="1">Loop</button>
+      <button data-fig="2">Axial roll</button>
+      <button data-fig="3">4-point roll</button>
+      <button data-fig="4">Immelmann</button>
+      <button data-fig="5">Split-S</button>
+      <button data-fig="6">Hammerhead</button>
+      <button data-fig="7">Cuban eight</button>
+      <button data-fig="8">Torque roll</button>
+    </div>
+    <p class="pickNote">Flown by the autopilot from wherever you are; it climbs to a safe height first. Recovery stays armed. Move a stick to take over.</p>
+  </div>
   <div id="warn" hidden><span id="warnTxt"></span></div>
   <div id="toast" class="panel" hidden><h2 id="toastH"></h2><p id="toastP"></p></div>
 </div>

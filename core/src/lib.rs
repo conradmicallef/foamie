@@ -13,6 +13,7 @@ pub mod sensors;
 pub mod estimator;
 pub mod flight;
 pub mod sim;
+pub mod aerobatics;
 
 use flight::{Mode, Task};
 use math::*;
@@ -42,10 +43,14 @@ fn sim() -> &'static mut Sim {
     s.rx = cl1(rx); s.ry = cl1(ry); s.lx = cl1(lx); s.ly = cl1(ly); s.l_active = l_active != 0;
 }
 #[no_mangle] pub extern "C" fn fz_set_mode(m: u32) { sim().set_mode(Mode::from(m)); }
-/// 1 takeoff, 2 circuit (toggles), 3 land.
+/// 1 takeoff, 2 circuit (toggles), 3 land, 4 aerobatic show, 10 + figure: one aerobatic figure.
 #[no_mangle] pub extern "C" fn fz_cmd(c: u32) {
     let s = sim();
-    match c { 1 => s.start_auto(Task::Takeoff), 2 => s.toggle_circuit(), 3 => s.start_auto(Task::Land), _ => {} }
+    match c {
+        1 => s.start_auto(Task::Takeoff), 2 => s.toggle_circuit(), 3 => s.start_auto(Task::Land),
+        4 => s.start_show(None),
+        _ => if let Some(f) = aerobatics::Fig::from(c.wrapping_sub(10)) { s.start_show(Some(f)); },
+    }
 }
 /// 1 wind level (0–2), 2 recovery on/off, 3 weathervane on/off, 4 real plane on/off (resets).
 #[no_mangle] pub extern "C" fn fz_set_opt(id: u32, v: f64) {
@@ -97,6 +102,7 @@ fn sim() -> &'static mut Sim {
     o[57] = tr.aux.thrust / (model::AC.m * model::G);
     o[58] = n.v[2];
     o[59] = s.var.battery as u8 as f64;
+    if let Some(a) = s.auto { if a.task == Task::Show { o[60] = a.show.current() as u8 as f64; o[61] = a.show.fig as f64; o[62] = a.show.n as f64; } }
     unsafe { STATE = o; STATE.as_ptr() }
 }
 

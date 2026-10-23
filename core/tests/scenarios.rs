@@ -126,3 +126,48 @@ fn fbwa_levels_hands_off_and_transitions_from_hover() {
     assert!(foamie_core::math::axes(s.truth.q).0[2] > 0.9, "back in the hover");
     assert!(!s.crashed);
 }
+
+fn show(real: bool, fig: Option<foamie_core::aerobatics::Fig>, seed: u64) -> (bool, usize, usize, f64) {
+    let mut s = Sim::new(seed);
+    if real { s.set_real(true); }
+    s.start_auto(Task::Takeoff);
+    run(&mut s, 16.0);
+    events(&mut s);
+    s.start_show(fig);
+    let (mut figs, mut rec, mut low) = (0, 0, f64::INFINITY);
+    for _ in 0..(150.0 / 0.002) as usize {
+        s.step();
+        low = low.min(s.truth.lowest());
+        for e in events(&mut s) { match e.0 { Ev::FigureStarted => figs += 1, Ev::Recovery => rec += 1, _ => {} } }
+        if s.crashed || s.auto.map_or(true, |a| a.task != Task::Show) { break; }
+    }
+    (s.crashed, figs, rec, low)
+}
+
+#[test]
+fn every_aerobatic_figure_flies_cleanly() {
+    for f in 1..=8 {
+        let fig = foamie_core::aerobatics::Fig::from(f).unwrap();
+        let (crashed, figs, rec, low) = show(false, Some(fig), 40 + f as u64);
+        assert!(!crashed && figs == 1 && rec == 0, "{fig:?}: crashed {crashed}, recoveries {rec}");
+        assert!(low > 8.0, "{fig:?} got down to {low:.1} m");
+    }
+}
+
+#[test]
+fn full_aerobatic_show_ideal_and_real() {
+    for real in [false, true] {
+        let (crashed, figs, _, _) = show(real, None, 77);
+        assert!(!crashed, "real = {real}");
+        assert_eq!(figs, 8, "all eight figures (real = {real})");
+    }
+}
+
+#[test]
+fn show_from_the_pad_takes_off_first() {
+    let mut s = Sim::new(3);
+    s.start_show(Some(foamie_core::aerobatics::Fig::Loop));
+    let mut started = false;
+    for _ in 0..(40.0 / 0.002) as usize { s.step(); if events(&mut s).iter().any(|e| e.0 == Ev::FigureStarted) { started = true; break; } }
+    assert!(started && !s.crashed);
+}

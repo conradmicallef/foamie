@@ -6,6 +6,7 @@ use crate::flight::*;
 use crate::math::*;
 use crate::model::*;
 use crate::sensors::Sensors;
+use crate::aerobatics::{Fig, Show, Step};
 
 pub const DT: f64 = 0.002;
 pub const WINDS: [f64; 3] = [0.0, 2.0, 4.0];
@@ -15,6 +16,7 @@ pub const WINDS: [f64; 3] = [0.0, 2.0, 4.0];
 pub enum Ev {
     TakeoffDone = 1, YouHaveControl = 2, TailLanding = 3, HardTail = 4, Belly = 5, Touched = 6, Crash = 7,
     Recovery = 8, PulledOut = 9, Recovered = 10, StickLy = 11, ModeChanged = 12, BatteryLow = 13, BatteryEmpty = 14,
+    FigureStarted = 15, FigureDone = 16, ShowDone = 17,
 }
 #[derive(Clone, Copy)]
 pub struct Event { pub code: Ev, pub a: f64, pub b: f64, pub c: f64, pub d: f64 }
@@ -110,7 +112,7 @@ impl Sim {
         let (x, _, _) = axes(self.fc.nav.q);
         self.fc.reset_i();
         let z = self.fc.nav.p[2];
-        let mk = |task, phase| Auto { task, phase, t: 0.0, hd: [0.0, 1.0], ly0: 0.0, back: Mode::QLoiter, wing: false, c: 0.0 };
+        let mk = |task, phase| Auto { task, phase, t: 0.0, hd: [0.0, 1.0], ly0: 0.0, back: Mode::QLoiter, wing: false, c: 0.0, show: Show::full(), then_show: None };
         let a = match task {
             Task::Takeoff => {
                 if !self.ground_now() && z > 1.5 { return self.start_auto(Task::Circuit); }
@@ -126,11 +128,24 @@ impl Sim {
                 let far = hypot(self.fc.nav.p[0], self.fc.nav.p[1]) > 12.0 && x[2] < 0.6;
                 mk(Task::Land, if far { Phase::Approach } else if x[2] < 0.6 { Phase::Pullup } else { Phase::Brake })
             }
-            Task::Recover => return,
+            Task::Recover | Task::Show => return,
         };
         let mut a = a;
         a.ly0 = self.sticks.ly;
         self.auto = Some(a);
+    }
+    /// Fly the whole aerobatic show, or one figure. From the ground it takes off first.
+    pub fn start_show(&mut self, fig: Option<Fig>) {
+        if self.crashed { return; }
+        let show = match fig { Some(f) => Show::single(f), None => Show::full() };
+        self.fc.reset_i();
+        if self.ground_now() || self.fc.nav.p[2] < 1.5 {
+            self.start_auto(Task::Takeoff);
+            if let Some(a) = self.auto.as_mut() { a.then_show = Some(show); }
+            return;
+        }
+        self.auto = Some(Auto { task: Task::Show, phase: Phase::Show, t: 0.0, hd: [0.0, 1.0], ly0: self.sticks.ly,
+            back: self.mode, wing: false, c: 0.0, show, then_show: None });
     }
     pub fn toggle_circuit(&mut self) {
         if matches!(self.auto, Some(a) if a.task == Task::Circuit) { self.auto = None; self.fc.reset_i(); }
@@ -164,7 +179,25 @@ impl Sim {
                 self.fc.act.thr = 0.95;
                 if th <= 0.22 && x[2] < 0.5 {
                     a.task = Task::Circuit; a.phase = Phase::Fly; a.t = 0.0; self.fc.reset_i();
-                    self.emit(Ev::TakeoffDone, 0.0, 0.0, 0.0, 0.0);
+                    if let Some(sh) = a.then_show.take() { a.task = Task::Show; a.phase = Phase::Show; a.show = sh; }
+                    else { self.emit(Ev::TakeoffDone, 0.0, 0.0, 0.0, 0.0); }
+                }
+            }
+            Phase::Show => {
+                let mut sh = a.show;
+                let r = sh.step(&mut self.fc, dt);
+                a.show = sh;
+                match r {
+                    Step::Running => {}
+                    Step::FigureStarted(f) => self.emit(Ev::FigureStarted, f as u8 as f64, (sh.fig + 1) as f64, sh.n as f64, 0.0),
+                    Step::FigureDone(f) => {
+                        self.emit(Ev::FigureDone, f as u8 as f64, n.p[2], 0.0, 0.0);
+                        if sh.single { a.task = Task::Circuit; a.phase = Phase::Fly; a.t = 0.0; self.fc.reset_i(); }
+                    }
+                    Step::ShowDone => {
+                        self.emit(Ev::ShowDone, 0.0, n.p[2], 0.0, 0.0);
+                        a.task = Task::Circuit; a.phase = Phase::Fly; a.t = 0.0; self.fc.reset_i();
+                    }
                 }
             }
             Phase::Fly => {
@@ -251,6 +284,7 @@ impl Sim {
             self.auto = Some(Auto {
                 task: Task::Recover, phase: if fast { Phase::Pull } else { Phase::HoverUp }, t: 0.0,
                 hd: [0.0, 1.0], ly0: self.sticks.ly, back: self.mode, wing: false, c: 0.0,
+                show: Show::full(), then_show: None,
             });
             self.fc.reset_i();
             self.emit(Ev::Recovery, t, v, 0.0, 0.0);
@@ -267,7 +301,8 @@ impl Sim {
                 self.emit(Ev::YouHaveControl, m as u8 as f64, 0.0, 0.0, 0.0);
             }
         }
-        if self.recover_on && self.auto.is_none() { self.check_recovery(); }
+        // recovery also watches over the aerobatic show
+        if self.recover_on && self.auto.map_or(true, |a| a.task == Task::Show) { self.check_recovery(); }
         if self.auto.is_some() { self.autopilot(dt); return; }
         let s = self.sticks;
         self.fc.pilot(self.mode, &s, self.vane_on, dt);
