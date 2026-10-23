@@ -37,7 +37,7 @@ const R: f64 = 9.0;
 const V_FIG: f64 = 14.0;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub enum RollKind { None, Full, Half, Points4 }
+pub enum RollKind { None, Full, Half, Points4, /** roll back from the angle held on entry to wings-normal */ Unroll }
 
 #[derive(Clone, Copy, Debug)]
 pub enum El {
@@ -45,8 +45,9 @@ pub enum El {
     Line { len: f64, kind: RollKind, a: f64, b: f64 },
     /// Pull (toward the canopy) through `deg` on radius `r`.
     Arc { r: f64, deg: f64 },
-    /// Vertical line until airspeed drops below `v` (or `max` m).
-    UpLine { max: f64, v: f64 },
+    /// Vertical line until airspeed drops below `v` (or `max` m); `quarter` = quarter roll in the first 5 m so a
+    /// following pivot turns the nose within the figure plane.
+    UpLine { max: f64, v: f64, quarter: bool },
     /// Stall-turn pivot: 180° of rudder at the top; continues pointing down.
     Pivot,
     /// Prop hang spinning at `spin` rad/s for `t` s, then line the belly up with the show line.
@@ -64,10 +65,11 @@ const P_ROLL: &[El] = &[rolled(48.0, RollKind::Full, 0.22, 0.78)];
 const P_POINTS: &[El] = &[rolled(64.0, RollKind::Points4, 0.1, 0.9)];
 const P_IMMELMANN: &[El] = &[line(10.0), arc(180.0), rolled(26.0, RollKind::Half, 0.08, 0.5)];
 const P_SPLIT_S: &[El] = &[rolled(24.0, RollKind::Half, 0.3, 0.75), arc(180.0), line(12.0)];
-const P_HAMMERHEAD: &[El] = &[line(10.0), Arc { r: 8.0, deg: 90.0 }, UpLine { max: 20.0, v: 5.0 }, Pivot, line(5.0), Arc { r: 10.0, deg: 90.0 }, line(12.0)];
+/// Stall turn: pull up, quarter roll so the pivot is in the figure plane, rudder pivot, quarter roll back, pull out.
+const P_HAMMERHEAD: &[El] = &[line(10.0), Arc { r: 8.0, deg: 90.0 }, UpLine { max: 20.0, v: 5.0, quarter: true }, Pivot, rolled(8.0, RollKind::Unroll, 0.0, 0.6), Arc { r: 10.0, deg: 90.0 }, line(12.0)];
 /// 5/8 loop, half roll on the 45° down-line, 3/4 loop, half roll, 1/8 loop to level.
 const P_CUBAN: &[El] = &[line(10.0), arc(225.0), rolled(20.0, RollKind::Half, 0.3, 0.7), arc(270.0), rolled(20.0, RollKind::Half, 0.3, 0.7), arc(45.0), line(12.0)];
-const P_TORQUE: &[El] = &[line(10.0), Arc { r: 8.0, deg: 90.0 }, UpLine { max: 14.0, v: 3.5 }, Hang { t: 4.0, spin: 4.0 }, PitchOut, line(14.0)];
+const P_TORQUE: &[El] = &[line(10.0), Arc { r: 8.0, deg: 90.0 }, UpLine { max: 14.0, v: 3.5, quarter: false }, Hang { t: 4.0, spin: 4.0 }, PitchOut, line(14.0)];
 
 pub fn program(f: Fig) -> &'static [El] {
     match f {
@@ -100,21 +102,38 @@ fn advance(p: Pose, e: El) -> Pose {
     }
 }
 
-/// Lowest point and horizontal extent of a figure planned from (0, 0) heading into wind.
-fn extents(f: Fig) -> (f64, f64, f64) {
+/// Lowest point and horizontal extent of a figure planned from (0, 0) heading into wind, as seen from the ground
+/// when the figure frame drifts along the line at `d` m/s: the path is walked in time and each point shifted.
+fn extents(f: Fig, d: f64) -> (f64, f64, f64) {
     let (mut wmin, mut umin, mut umax) = (0.0f64, 0.0f64, 0.0f64);
     let mut p = Pose { u: 0.0, w: 0.0, th: 0.0, c: 1.0 };
+    let mut t = 0.0;
+    let mut mark = |u: f64, w: f64, t: f64| { let ug = u + d * t; wmin = wmin.min(w); umin = umin.min(ug); umax = umax.max(ug); };
     for e in program(f) {
-        // sample arcs so their bulge counts
-        if let Arc { r, deg } = *e {
-            let steps = (deg / 10.0) as usize + 1;
-            for k in 1..=steps {
-                let q = advance(p, Arc { r, deg: deg * k as f64 / steps as f64 });
-                wmin = wmin.min(q.w); umin = umin.min(q.u); umax = umax.max(q.u);
+        match *e {
+            Arc { r, deg } => {
+                let steps = (deg / 5.0) as usize + 1;
+                for k in 1..=steps {
+                    let q = advance(p, Arc { r, deg: deg * k as f64 / steps as f64 });
+                    mark(q.u, q.w, t + r * deg * D2R * k as f64 / steps as f64 / V_FIG);
+                }
+                t += r * deg * D2R / V_FIG;
             }
+            Line { len, .. } => {
+                let steps = (len as usize).max(1);
+                for k in 1..=steps {
+                    let fr = k as f64 / steps as f64;
+                    mark(p.u + len * fr * cos(p.th), p.w + len * fr * sin(p.th), t + len * fr / V_FIG);
+                }
+                t += len / V_FIG;
+            }
+            UpLine { max, .. } => { t += 0.6 * max / 9.0; }
+            Pivot => { t += 1.3; }
+            Hang { t: th, .. } => { t += th; }
+            PitchOut => { t += 1.7; }
         }
         p = advance(p, *e);
-        wmin = wmin.min(p.w); umin = umin.min(p.u); umax = umax.max(p.u);
+        mark(p.u, p.w, t);
     }
     (wmin, umin, umax)
 }
@@ -153,16 +172,26 @@ pub struct Show {
     pub err2: f64, pub errn: f64, pub errmax: f64,
     /// On the planned path (within 4 m) of a figure whose plan stays above the floor: recovery may trust the plan.
     pub on_track: bool,
+    /// Roll angle held on entry to an Unroll element (rad).
+    pub phi0: f64,
+    /// "Flying the wind": mean wind (smoothed while positioning), the along-line drift of the figure frame (m/s)
+    /// during the figure, the frame origin at the gate, and time since the gate.
+    pub wmean: [f64; 2],
+    pub drift: f64,
+    pub origin0: [f64; 2],
+    pub tfig: f64,
 }
 
 impl Show {
     pub fn full() -> Show { Show::new(SHOW, SHOW.len(), false) }
+    /// Seed the mean wind with the current estimate when the show starts.
+    pub fn seed_wind(&mut self, w: [f64; 2]) { self.wmean = w; }
     pub fn single(f: Fig) -> Show { Show::new([f; 8], 1, true) }
     fn new(seq: [Fig; 8], n: usize, single: bool) -> Show {
         Show {
             seq, n, fig: 0, single, stage: Stage::Positioning, h: [1.0, 0.0], origin: CENTRE, entry_w: 20.0, leg: 0,
             el: 0, start: Pose { u: 0.0, w: 0.0, th: 0.0, c: 1.0 }, prog: 0.0, qref: [1.0, 0.0, 0.0, 0.0], t: 0.0,
-            hd: [1.0, 0.0], thr_i: 0.0, err2: 0.0, errn: 0.0, errmax: 0.0, on_track: false,
+            hd: [1.0, 0.0], thr_i: 0.0, err2: 0.0, errn: 0.0, errmax: 0.0, on_track: false, phi0: 0.0, wmean: [0.0; 2], drift: 0.0, origin0: CENTRE, tfig: 0.0,
         }
     }
     pub fn current(&self) -> Fig { self.seq[self.fig.min(self.n - 1)] }
@@ -190,9 +219,14 @@ impl Show {
         // into wind along the show line (parallel to the crowd line, x); calm: keep the previous direction
         if abs(w[0]) > 0.6 { self.h = [if w[0] < 0.0 { 1.0 } else { -1.0 }, 0.0]; }
         let f = self.current();
-        let (wmin, umin, umax) = extents(f);
-        let u_gate = -(umin + umax) / 2.0;
+        // the figure drifts with the along-line mean wind: centre the drifted shape, as seen from the ground
+        let d = self.wmean[0] * self.h[0] + self.wmean[1] * self.h[1];
+        let (wmin, umin, umax) = extents(f, d);
+        // measured centring trim: where the flown figure really sits relative to its nominal plan
+        let trim = match f { Fig::Hammerhead => -5.8, _ => 0.0 };
+        let u_gate = -(umin + umax) / 2.0 + trim;
         self.origin = [CENTRE[0] + self.h[0] * u_gate, CENTRE[1] + self.h[1] * u_gate];
+        self.origin0 = self.origin;
         self.entry_w = max(20.0, FLOOR - wmin);
         self.leg = 0;
     }
@@ -214,7 +248,8 @@ impl Show {
                     self.stage = Stage::PitchOutOfHover; self.t = 0.0; self.hd = fc.belly_dir();
                     return Step::Running;
                 }
-                if self.leg == 0 && self.t == 0.0 { self.plan(fc); }
+                for i in 0..2 { self.wmean[i] += (n.wind_est[i] - self.wmean[i]) * min(1.0, dt / 8.0); }
+                if self.leg == 0 && (self.t == 0.0 || (self.t % 1.0) < dt) { self.plan(fc); }
                 self.t += dt;
                 self.position(fc, dt)
             }
@@ -258,6 +293,9 @@ impl Show {
         self.t = 0.0;
         self.thr_i = 0.0;
         self.err2 = 0.0; self.errn = 0.0; self.errmax = 0.0;
+        self.drift = self.wmean[0] * self.h[0] + self.wmean[1] * self.h[1];
+        self.tfig = 0.0;
+        self.origin = self.origin0;
         self.start = Pose { u: 0.0, w: self.entry_w, th: 0.0, c: 1.0 };
         self.qref = fc.nav.q;
         Step::FigureStarted(self.current())
@@ -267,6 +305,12 @@ impl Show {
     fn anchor_here(&mut self, fc: &Fc, th: f64, c: f64) {
         let (u, w, _) = self.to_uw(fc.nav.p);
         self.start = Pose { u, w, th, c };
+        // roll angle of the actual attitude relative to this element's wings-normal frame
+        let t = self.dir(th);
+        let y0 = mul(self.nrm(), c);
+        let z0 = cross(t, y0);
+        let y = axes(fc.nav.q).1;
+        self.phi0 = atan2(dot(y, z0), dot(y, y0));
     }
 
     fn fly(&mut self, fc: &mut Fc, dt: f64) -> Step {
@@ -277,12 +321,21 @@ impl Show {
         let mut done = false;
         let mut next_anchor: Option<(f64, f64)> = None;
         self.t += dt;
+        // the figure frame drifts with the along-line mean wind
+        self.tfig += dt;
+        self.origin = [self.origin0[0] + self.h[0] * self.drift * self.tfig, self.origin0[1] + self.h[1] * self.drift * self.tfig];
         if !matches!(e, Line { .. } | Arc { .. } | UpLine { .. }) { self.on_track = n.p[2] > FLOOR; }
         match e {
             Line { .. } | Arc { .. } | UpLine { .. } => done = self.track(fc, e, dt),
             Pivot => {
                 // rudder pivot at the top: rotate the attitude reference about the body z axis
-                if self.prog == 0.0 { self.qref = n.q; }
+                if self.prog == 0.0 {
+                    // nose straight up, yaw axis exactly along the figure-plane normal: the pivot stays in the plane
+                    let z_b = axes(n.q).2;
+                    let z = mul(self.nrm(), if dot(z_b, self.nrm()) >= 0.0 { 1.0 } else { -1.0 });
+                    let x = [0.0, 0.0, 1.0];
+                    self.qref = quat_from_axes(x, cross(z, x), z);
+                }
                 let step = min(2.5 * dt, PI - self.prog);
                 let h = -0.5 * step;
                 self.qref = qnorm(qmul(self.qref, [cos(h), 0.0, 0.0, sin(h)]));
@@ -326,6 +379,7 @@ impl Show {
         if self.el < prog.len() { return Step::Running; }
         // ---- figure finished
         self.on_track = false;
+        self.drift = 0.0;
         self.fig += 1;
         self.stage = Stage::Positioning;
         self.t = 0.0;
@@ -340,7 +394,8 @@ impl Show {
         let up = [0.0, 0.0, 1.0];
         let s0 = self.start;
         let (u, w, _off) = self.to_uw(n.p);
-        let v = len(n.v);
+        let vf = if self.stage == Stage::Flying { sub(n.v, mul(self.h3(), self.drift)) } else { n.v };
+        let v = len(vf);
         // closest point, tangent angle, curvature (toward the canopy side), completion and fraction done
         let (closest_uw, th, kappa, done, frac);
         match e {
@@ -380,7 +435,10 @@ impl Show {
         // canopy-side normal in the plane (toward the centre of an arc)
         let nin = self.dir(th + s0.c * PI / 2.0);
         // ---- roll on this element
-        let (phi, phi_rate) = roll_angle(e, frac, v);
+        let (phi, phi_rate) = match e {
+            UpLine { quarter: true, .. } => { let s = self.prog; (PI / 2.0 * clamp(s / 5.0, 0.0, 1.0), if s < 5.0 { PI / 2.0 / 5.0 * v } else { 0.0 }) }
+            _ => roll_angle(e, frac, v, self.phi0),
+        };
         // reference frame: x along the path, y = canopy-sense normal of the figure plane, then rolled
         let y0 = mul(self.nrm(), s0.c);
         let z0 = cross(t, y0);
@@ -394,7 +452,7 @@ impl Show {
         let el = len(e_pos);
         self.on_track = el < 4.0;
         if !matches!(e, UpLine { .. }) { self.err2 += el * el; self.errn += 1.0; self.errmax = self.errmax.max(el); }
-        let v_perp = sub(n.v, mul(t, dot(n.v, t)));
+        let v_perp = sub(vf, mul(t, dot(vf, t)));
         let a_des = add(add(mul(nin, kappa * v * v), mul(e_pos, 1.6)), mul(v_perp, -2.2));
         let a_req = add(a_des, [0.0, 0.0, G]);
         // ---- point the nose so lift and side force make that acceleration
@@ -426,14 +484,15 @@ impl Show {
 }
 
 /// Roll angle (rad, right positive) and rate along an element at progress `frac`.
-fn roll_angle(e: El, frac: f64, v: f64) -> (f64, f64) {
+fn roll_angle(e: El, frac: f64, v: f64, phi0: f64) -> (f64, f64) {
     let (len, kind, a, b) = match e { Line { len, kind, a, b } => (len, kind, a, b), _ => return (0.0, 0.0) };
     if kind == RollKind::None { return (0.0, 0.0); }
-    let total = match kind { RollKind::Full | RollKind::Points4 => 2.0 * PI, RollKind::Half => PI, RollKind::None => 0.0 };
+    let total = match kind { RollKind::Full | RollKind::Points4 => 2.0 * PI, RollKind::Half => PI, RollKind::None | RollKind::Unroll => 0.0 };
     let span = (b - a) * len;
     let x = clamp((frac - a) / (b - a), 0.0, 1.0);
     let moving = frac > a && frac < b;
     match kind {
+        RollKind::Unroll => (phi0 * (1.0 - x), if moving { -phi0 / span * v } else { 0.0 }),
         RollKind::Points4 => {
             // four 90° points: roll for 65% of each quarter, hold for the rest
             let q = min(x * 4.0, 3.9999);

@@ -142,7 +142,8 @@ impl Sim {
     /// Fly the whole aerobatic show, or one figure. From the ground it takes off first.
     pub fn start_show(&mut self, fig: Option<Fig>) {
         if self.crashed { return; }
-        let show = match fig { Some(f) => Show::single(f), None => Show::full() };
+        let mut show = match fig { Some(f) => Show::single(f), None => Show::full() };
+        show.seed_wind(self.fc.nav.wind_est);
         self.fc.reset_i();
         if self.ground_now() || self.fc.nav.p[2] < 1.5 {
             self.start_auto(Task::Takeoff);

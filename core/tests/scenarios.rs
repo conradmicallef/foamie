@@ -183,8 +183,10 @@ fn full_aerobatic_show_ideal_and_real() {
 #[test]
 fn figures_enter_into_wind_and_show_survives_gusts() {
     // wind from the east: every figure starts heading east; recoveries may abandon a figure, never the aircraft
-    let (crashed, figs, _, _, _, east) = show(false, 2, None, 78);
+    let (crashed, figs, rec, _, centre, east) = show(false, 2, None, 78);
     assert!(!crashed && figs == 8);
+    assert_eq!(rec, 0, "flying the wind: no recovery needed in 4 m/s gusts");
+    assert!(centre < 6.0, "centred in wind within {centre:.1} m");
     assert!(east > 0.99, "into wind: {east}");
 }
 

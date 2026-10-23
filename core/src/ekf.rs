@@ -50,6 +50,10 @@ pub struct Ekf {
     last_acc: V3,
     last_gyro: V3,
     was_ground: bool,
+    /// Low-passed body side forces for hover drag-fusion wind estimation.
+    f_side: [f64; 2],
+    /// Seconds of hover drag-fusion wind estimation so far (the estimate is used once it has settled).
+    wind_t: f64,
     /// Count of rejected measurements (gating), for diagnostics.
     pub rejected: u32,
 }
@@ -77,7 +81,7 @@ impl Ekf {
             q: tr.q, p: tr.p, v: tr.v, bg: [0.0; 3], ba: [0.0; 3], pm, step_n: 0,
             hist: [(tr.p, tr.v); HIST], hi: 0, w: [0.0; 3], af: [0.0; 3], pitot: 0.0, lidar: None, lidar_age: 1.0,
             baro_ref: 0.0, baro_init: 0, thr_est: 0.0, wind_est: [0.0; 2], last_acc: [0.0, 0.0, G], last_gyro: [0.0; 3],
-            was_ground: true, rejected: 0,
+            was_ground: true, rejected: 0, f_side: [0.0; 2], wind_t: 0.0,
         }
     }
 
@@ -225,6 +229,19 @@ impl Ekf {
         let air = max(vax, 0.0);
         let slip = clamp(-m.acc[1] * 4.3 / max(25.0, air * air), -0.5, 0.5);
         let xb = qrot(self.q, [1.0, 0.0, 0.0]);
+        // hover wind from drag (like ArduPilot EK3_DRAG_*): with the nose up, the body y/z accelerometer axes are
+        // horizontal and feel only aerodynamic side force, which grows with the square of the air speed
+        let kf = min(1.0, dt / 0.4);
+        self.f_side[0] += (f[1] - self.f_side[0]) * kf;
+        self.f_side[1] += (f[2] - self.f_side[1]) * kf;
+        if xb[2] > 0.8 && self.thr_est > 0.2 && len(self.v) < 4.0 {
+            // same calibrated drag as the hover feed-forward (1.7 × flat plate)
+            let inv = |fs: f64, cda: f64| signum(fs) * sqrt(abs(fs) * AC.m / (1.7 * 0.5 * RHO * cda));
+            let rel = qrot(self.q, [0.0, inv(self.f_side[0], 0.125), inv(self.f_side[1], 0.24)]);
+            let k = min(1.0, dt / 1.5);
+            for i in 0..2 { self.wind_est[i] += (self.v[i] + rel[i] - self.wind_est[i]) * k; }
+            self.wind_t += dt;
+        }
         if vax > 8.0 && abs(xb[2]) < 0.35 {
             let k = min(1.0, dt / 6.0);
             for i in 0..2 { self.wind_est[i] += (self.v[i] - vax * xb[i] - self.wind_est[i]) * k; }
@@ -233,7 +250,10 @@ impl Ekf {
         self.was_ground = on_ground;
         Nav {
             p: self.p, v: self.v, q: self.q, w: self.w, af: self.af,
-            vax, air, vi, slip, agl_tail, low, on_ground, wind: wind_hint, wind_est: self.wind_est,
+            vax, air, vi, slip, agl_tail, low, on_ground,
+            // weathervane on the estimated wind once it has settled; before that the hover trim is the hint
+            wind: if self.wind_t > 3.0 { Some(self.wind_est) } else { wind_hint },
+            wind_est: self.wind_est,
         }
     }
 }
