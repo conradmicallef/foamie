@@ -25,7 +25,7 @@ export const enum Ev {
   Recovery = 8, PulledOut = 9, Recovered = 10, StickLy = 11, ModeChanged = 12, BatteryLow = 13, BatteryEmpty = 14,
   FigureStarted = 15, FigureDone = 16, ShowDone = 17,
 }
-export const enum Opt { Wind = 1, Recovery = 2, Weathervane = 3, RealPlane = 4 }
+export const enum Opt { Wind = 1, Recovery = 2, Weathervane = 3, RealPlane = 4, Camera = 5 }
 export const enum Cmd { Takeoff = 1, Circuit = 2, Land = 3, Show = 4 }
 
 export interface Event { code: Ev; a: number; b: number; c: number; d: number }
@@ -79,6 +79,15 @@ export class State {
   get showLength() { return this.s[62]; }
   /** 0 pitching out of a hover, 1 positioning for the entry gate, 2 flying the figure. */
   get showStage() { return this.s[63]; }
+  /** Tail camera (real-plane mode): switched on, AprilTag locked, which tag (0 = 40 cm, 1 = 8 cm). */
+  get camOn() { return this.s[64] !== 0; }
+  get tagLock() { return this.s[65] !== 0; }
+  get tagId() { return this.s[66]; }
+  /** Last detection in the 640 × 480 image: centre u, v and size in pixels. */
+  get tagPx(): V3 { return [this.s[67], this.s[68], this.s[69]]; }
+  get tagAge() { return this.s[70]; }
+  /** The EKF's estimate of the GPS's slowly wandering offset (horizontal, m). */
+  get gpsOffset() { return this.s[71]; }
 }
 
 export class Core {

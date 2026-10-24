@@ -6,9 +6,10 @@ fn run(s: &mut Sim, sec: f64) { for _ in 0..(sec / 0.002) as usize { s.step(); i
 fn events(s: &mut Sim) -> Vec<(Ev, [f64; 4])> { s.take_events().iter().flatten().map(|e| (e.code, [e.a, e.b, e.c, e.d])).collect() }
 
 /// Take off, fly part of the circuit, then autoland. Returns (tail landing score, miss distance m, time s).
-fn autoland(seed: u64, real: bool, wind: usize, circuit_s: f64) -> Option<(f64, f64, f64)> {
+fn autoland(seed: u64, real: bool, wind: usize, circuit_s: f64) -> Option<(f64, f64, f64)> { autoland_cam(seed, real, true, wind, circuit_s) }
+fn autoland_cam(seed: u64, real: bool, cam: bool, wind: usize, circuit_s: f64) -> Option<(f64, f64, f64)> {
     let mut s = Sim::new(seed);
-    if real { s.set_real(true); }
+    if real { s.set_cam(cam); s.set_real(true); }
     s.set_wind(wind);
     s.start_auto(Task::Takeoff);
     run(&mut s, 14.0 + circuit_s);
@@ -36,10 +37,20 @@ fn ideal_autoland_is_fast_and_accurate() {
 fn real_plane_autoland_lands_within_gps_accuracy() {
     let mut ok = 0; let mut miss = 0.0;
     for wind in 0..3 { for off in [0.0, 10.0, 20.0] {
-        if let Some((_, d, _)) = autoland(200 + wind as u64 * 31 + off as u64, true, wind, off) { ok += 1; miss += d; }
+        if let Some((_, d, _)) = autoland_cam(200 + wind as u64 * 31 + off as u64, true, false, wind, off) { ok += 1; miss += d; }
     }}
     assert!(ok >= 8, "only {ok}/9 tail landings");
-    assert!(miss / ok as f64 <= 2.0, "mean miss {}", miss / ok as f64);
+    assert!(miss / ok as f64 <= 1.2, "mean miss {}", miss / ok as f64);
+}
+
+#[test]
+fn real_plane_precision_landing_on_the_apriltag() {
+    let mut ok = 0; let mut miss = 0.0;
+    for wind in 0..3 { for off in [0.0, 10.0, 20.0] {
+        if let Some((_, d, _)) = autoland(200 + wind as u64 * 31 + off as u64, true, wind, off) { ok += 1; miss += d; }
+    }}
+    assert_eq!(ok, 9, "every landing on the legs");
+    assert!(miss / ok as f64 <= 0.35, "mean miss {} m: the camera should land it about as well as perfect knowledge", miss / ok as f64);
 }
 
 fn loiter_drift(real: bool, wind: usize, spin: bool) -> f64 {

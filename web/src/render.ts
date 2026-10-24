@@ -1,5 +1,6 @@
 // 3D view on a 2D canvas: sky, field, circuit, pad, windsock, trees, smoke, the aircraft with moving
 // control surfaces and its shadow, plus (in real-plane mode) where the flight controller thinks it is.
+import { tagPolys } from './tag';
 import type { State } from './core';
 import { Task } from './core';
 import { add, clamp, cross, dot, horiz, len, mul, norm, qrot, sub, type V3 } from './vec';
@@ -56,6 +57,8 @@ function planeGeom(st: State): Poly[] {
 }
 
 export type View = 'pilot' | 'chase';
+
+const TAG = tagPolys();
 
 export class Renderer {
   private ctx: CanvasRenderingContext2D;
@@ -148,8 +151,9 @@ export class Renderer {
     fillPoly(ring(1.6, 0.01), COL.pad);
     ctx.strokeStyle = COL.padRing; ctx.lineWidth = 2; ctx.beginPath();
     const rp = ring(1.25, 0.015); for (let i = 0; i < rp.length; i++) line(rp[i], rp[(i + 1) % rp.length]);
-    line([-0.6, 0, 0.02], [0.6, 0, 0.02]); line([0, -0.6, 0.02], [0, 0.6, 0.02]);
     ctx.stroke();
+    // the AprilTag the tail camera lands on
+    for (const t of TAG) fillPoly(t.pts.map(([x, y]) => [x, y, 0.02] as V3), t.col);
 
     // ---- windsock
     const W0 = st.windAt4m, ws = Math.hypot(W0[0], W0[1]);

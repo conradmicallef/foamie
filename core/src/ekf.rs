@@ -1,20 +1,23 @@
 //! Error-state extended Kalman filter for "Real plane" mode — the same structure as ArduPilot's EKF.
 //!
-//! Nominal state: position, velocity, attitude quaternion, gyro bias, accelerometer bias.
-//! Error state (15): δp, δv, δθ (body-frame attitude error), δb_gyro, δb_accel, with covariance P.
+//! Nominal state: position, velocity, attitude quaternion, gyro bias, accelerometer bias, GPS position offset.
+//! Error state (18): δp, δv, δθ (body-frame attitude error), δb_gyro, δb_accel, δb_gps, with covariance P.
 //! - Prediction at IMU rate (covariance every 10 ms).
 //! - Delayed GPS position/velocity fused against the state at the time of the fix (innovation from history).
-//! - Barometer and tail lidar for height, compass for heading, zero-velocity updates while sitting on the pad.
-//! - Every update is innovation-gated (χ² test), so GPS glitches and lidar dropouts are rejected, not followed.
+//! - The GPS's slowly wandering error is a state of its own (Gauss–Markov, ~25 s), so GPS still helps after it.
+//! - Tail camera: AprilTag detections on the pad give the position relative to the pad to centimetres, which pins
+//!   down the GPS offset (precision landing). No lidar: height comes from the tag, barometer and GPS.
+//! - Barometer for height, compass for heading, zero-velocity and ground-height updates while sitting on the legs.
+//! - Every update is innovation-gated (χ² test), so GPS glitches and false tag detections are rejected.
 //! Because GPS velocity and the accelerometer are tied together through the attitude, tilt is observable during
 //! manoeuvres without trusting the accelerometer as a gravity reference.
 
 use crate::estimator::Nav;
 use crate::math::*;
 use crate::model::{Truth, AC, G, LEGX, PTS, RHO};
-use crate::sensors::{Meas, GPS_LATENCY, MAG_EARTH};
+use crate::sensors::{cam_to_body, Meas, CAM_LATENCY, CAM_POS, GPS_LATENCY, MAG_EARTH};
 
-const N: usize = 15;
+const N: usize = 18;
 type Mat = [[f64; N]; N];
 const HIST: usize = 128;
 /// Covariance prediction interval (steps).
@@ -25,8 +28,10 @@ const ACC_NOISE: f64 = 0.35;         // m/s²/√Hz, includes motor vibration (s
 const GYRO_NOISE: f64 = 0.006;       // rad/s/√Hz
 const GYRO_BIAS_RW: f64 = 5e-4;      // rad/s/√s
 const ACC_BIAS_RW: f64 = 4e-3;       // m/s²/√s
-const GPS_POS_H: f64 = 1.0;          // m (the receiver's slowly wandering error, treated as noise)
-const GPS_POS_V: f64 = 1.8;
+const GPS_POS_H: f64 = 0.25;         // m, white part; the slow wander is the δb_gps state
+const GPS_POS_V: f64 = 0.4;
+const GPS_WANDER: [f64; 3] = [0.8, 0.8, 1.4]; // m, 1σ of the slow wander
+const GPS_TAU: f64 = 25.0;           // s
 const GPS_VEL: f64 = 0.1;            // m/s
 const GATE: f64 = 25.0;              // χ² gate (5σ) for one scalar measurement
 /// Compass-motor interference calibration (body frame, per unit throttle²): 85% of the real effect.
@@ -41,8 +46,15 @@ pub struct Ekf {
     w: V3,
     af: V3,
     pitot: f64,
-    lidar: Option<f64>,
-    lidar_age: f64,
+    qhist: [Q; HIST],
+    /// GPS position offset estimate (world, m).
+    pub bgps: V3,
+    /// Seconds since the last fused tag detection, and how many were fused / rejected.
+    pub tag_age: f64,
+    pub tag_n: u32,
+    /// Last detection's image position and size (px) and which tag, for the display.
+    pub tag_px: [f64; 3],
+    pub tag_id: usize,
     baro_ref: f64,
     baro_init: u32,
     thr_est: f64,
@@ -75,11 +87,12 @@ impl Ekf {
     /// Aligned on the pad (like an EKF that has settled before arming).
     pub fn new(tr: &Truth) -> Self {
         let mut pm = zero();
-        let d = [0.05, 0.05, 0.05, 0.02, 0.02, 0.02, 0.01, 0.01, 0.03, 0.01, 0.01, 0.01, 0.1, 0.1, 0.1];
+        let d = [0.05, 0.05, 0.05, 0.02, 0.02, 0.02, 0.01, 0.01, 0.03, 0.01, 0.01, 0.01, 0.1, 0.1, 0.1,
+                 GPS_WANDER[0], GPS_WANDER[1], GPS_WANDER[2]];
         for i in 0..N { pm[i][i] = d[i] * d[i]; }
         Ekf {
             q: tr.q, p: tr.p, v: tr.v, bg: [0.0; 3], ba: [0.0; 3], pm, step_n: 0,
-            hist: [(tr.p, tr.v); HIST], hi: 0, w: [0.0; 3], af: [0.0; 3], pitot: 0.0, lidar: None, lidar_age: 1.0,
+            hist: [(tr.p, tr.v); HIST], hi: 0, w: [0.0; 3], af: [0.0; 3], pitot: 0.0, qhist: [tr.q; HIST], bgps: [0.0; 3], tag_age: 99.0, tag_n: 0, tag_px: [0.0; 3], tag_id: 0,
             baro_ref: 0.0, baro_init: 0, thr_est: 0.0, wind_est: [0.0; 2], last_acc: [0.0, 0.0, G], last_gyro: [0.0; 3],
             was_ground: true, rejected: 0, f_side: [0.0; 2], wind_t: 0.0,
         }
@@ -100,6 +113,7 @@ impl Ekf {
         } }
         let sw = skew(w);
         for i in 0..3 { for j in 0..3 { phi[6 + i][6 + j] -= sw[i][j] * dt; } phi[6 + i][9 + i] = -dt; } // δθ ← δθ, δb_g
+        for i in 0..3 { phi[15 + i][15 + i] = 1.0 - dt / GPS_TAU; }                // GPS wander decays
         // P = Φ P Φᵀ + Q
         let mut tmp = zero();
         for i in 0..N { for k in 0..N { let a = phi[i][k]; if a != 0.0 { for j in 0..N { tmp[i][j] += a * self.pm[k][j]; } } } }
@@ -111,6 +125,7 @@ impl Ekf {
             np[6 + i][6 + i] += pow(GYRO_NOISE * vib, 2.0) * dt;
             np[9 + i][9 + i] += GYRO_BIAS_RW * GYRO_BIAS_RW * dt;
             np[12 + i][12 + i] += ACC_BIAS_RW * ACC_BIAS_RW * dt;
+            np[15 + i][15 + i] += 2.0 * GPS_WANDER[i] * GPS_WANDER[i] / GPS_TAU * dt;
         }
         // keep symmetric
         for i in 0..N { for j in (i + 1)..N { let m = 0.5 * (np[i][j] + np[j][i]); np[i][j] = m; np[j][i] = m; } }
@@ -140,9 +155,12 @@ impl Ekf {
             self.v[i] += dx[3 + i];
             self.bg[i] += dx[9 + i];
             self.ba[i] += dx[12 + i];
+            self.bgps[i] += dx[15 + i];
         }
         let dth = [dx[6], dx[7], dx[8]];
-        self.q = qnorm(qmul(self.q, [1.0, 0.5 * dth[0], 0.5 * dth[1], 0.5 * dth[2]]));
+        let dq = [1.0, 0.5 * dth[0], 0.5 * dth[1], 0.5 * dth[2]];
+        self.q = qnorm(qmul(self.q, dq));
+        for q in self.qhist.iter_mut() { *q = qnorm(qmul(*q, dq)); }
         // shift the history by the same correction so delayed innovations stay consistent
         for h in self.hist.iter_mut() { for i in 0..3 { h.0[i] += dx[i]; h.1[i] += dx[3 + i]; } }
     }
@@ -161,6 +179,8 @@ impl Ekf {
         self.w = add(mul(self.w, 0.6), mul(w_meas, 0.4));
         self.hi = (self.hi + 1) % HIST;
         self.hist[self.hi] = (self.p, self.v);
+        self.qhist[self.hi] = self.q;
+        for i in 0..3 { self.bgps[i] *= 1.0 - dt / GPS_TAU; }
         self.step_n += 1;
         if self.step_n % PRED_EVERY == 0 { self.predict_cov(dt * PRED_EVERY as f64); }
         self.thr_est += (thr_cmd - self.thr_est) * min(1.0, dt / 0.08);
@@ -172,27 +192,39 @@ impl Ekf {
             let lag = ((GPS_LATENCY / dt) as usize).min(HIST - 1);
             let (pd, vd) = self.hist[(self.hi + HIST - lag) % HIST];
             let sig = [GPS_POS_H, GPS_POS_H, GPS_POS_V];
-            for i in 0..3 { any |= self.update(&mut dx, &[(i, 1.0)], fix.p[i] - pd[i], sig[i] * sig[i]); }
+            for i in 0..3 { any |= self.update(&mut dx, &[(i, 1.0), (15 + i, 1.0)], fix.p[i] - pd[i] - self.bgps[i], sig[i] * sig[i]); }
             for i in 0..3 { any |= self.update(&mut dx, &[(3 + i, 1.0)], fix.v[i] - vd[i], GPS_VEL * GPS_VEL); }
         }
-        // ---- tail lidar: exact height near the ground
-        self.lidar_age += dt;
-        if let Some(l) = m.lidar {
-            self.lidar = l;
-            self.lidar_age = 0.0;
-            if let Some(r) = l {
-                let dir = qrot(self.q, [-1.0, 0.0, 0.0]);
-                let z = r * -dir[2] - qrot(self.q, [LEGX, 0.0, 0.0])[2];
-                let sd = 0.015 + 0.006 * r;
-                any |= self.update(&mut dx, &[(2, 1.0)], z - self.p[2], sd * sd);
+        // ---- AprilTag on the pad, seen by the tail camera: where the pad is relative to the aircraft.
+        // Compared with the state when the frame was taken. Like ArduPilot's precision landing it corrects
+        // position only, taking the attitude as known: with a 9 m lever arm, letting the tag also steer the
+        // attitude made the filter overconfident (tilt crept off by 10–20° in a long hover). The attitude's
+        // uncertainty is in the noise instead.
+        self.tag_age += dt;
+        if let Some(o) = m.tag {
+            let lag = ((CAM_LATENCY / dt) as usize).min(HIST - 1);
+            let k = (self.hi + HIST - lag) % HIST;
+            let (pd, _) = self.hist[k];
+            let r = rot(self.qhist[k]);
+            let w = qinv(self.qhist[k], mul(pd, -1.0));        // CG → tag, body frame
+            let pred = sub(w, CAM_POS);
+            let meas = cam_to_body(o.t);
+            let d = len(w);
+            // body x is the camera's depth axis; allow for a slightly crooked camera mount laterally
+            let lat = o.sd_lat + 0.015 * d;
+            let sd = [o.sd_depth + 0.004 * d, lat, lat];
+            let mut ok = false;
+            for i in 0..3 {
+                let h = [(0, -r[0][i]), (1, -r[1][i]), (2, -r[2][i])];
+                ok |= self.update(&mut dx, &h, meas[i] - pred[i], sd[i] * sd[i]);
             }
+            if ok { any = true; self.tag_age = 0.0; self.tag_n += 1; self.tag_px = o.px; self.tag_id = o.tag; }
         }
         // ---- barometer (height above the pad); prop wash makes it read high at high throttle
         if let Some(b) = m.baro {
             if self.baro_init < 25 { self.baro_ref += (b - self.p[2] - self.baro_ref) / (self.baro_init as f64 + 1.0); self.baro_init += 1; }
             else {
-                let near = self.lidar.is_some() && self.lidar_age < 0.2;
-                let sd = 0.35 + 0.3 * self.thr_est + if near { 0.5 } else { 0.0 };
+                let sd = 0.35 + 0.3 * self.thr_est;
                 any |= self.update(&mut dx, &[(2, 1.0)], b - self.baro_ref - 0.35 * self.thr_est - self.p[2], sd * sd);
             }
         }
@@ -211,8 +243,11 @@ impl Ekf {
             }
         }
         // ---- zero-velocity update while sitting on the legs with the motor stopped
+        // and, standing on the legs, the feet are at ground level: that pins the height without a lidar
         if self.was_ground && self.thr_est < 0.05 && self.step_n % 10 == 0 {
             for i in 0..3 { any |= self.update(&mut dx, &[(3 + i, 1.0)], -self.v[i], 0.03 * 0.03); }
+            let feet = -qrot(self.q, [LEGX, 0.0, 0.0])[2];
+            any |= self.update(&mut dx, &[(2, 1.0)], feet - self.p[2], 0.02 * 0.02);
         }
         if any { self.inject(&dx); }
         if let Some(pt) = m.pitot { self.pitot += (pt - self.pitot) * 0.5; }
@@ -223,7 +258,7 @@ impl Ekf {
         let thrust = AC.tmax * self.thr_est * clamp(1.0 - vf / AC.vp, 0.0, 1.0);
         let vi = sqrt(vf * vf + 2.0 * thrust / (RHO * AC.disc)) - vf;
         let tail_off = qrot(self.q, [LEGX, 0.0, 0.0])[2];
-        let agl_tail = match (self.lidar, self.lidar_age < 0.2) { (Some(r), true) => r * -qrot(self.q, [-1.0, 0.0, 0.0])[2], _ => self.p[2] + tail_off };
+        let agl_tail = self.p[2] + tail_off;
         let mut low = f64::INFINITY;
         for pt in PTS.iter() { low = min(low, self.p[2] + qrot(self.q, pt.r)[2]); }
         let air = max(vax, 0.0);
@@ -246,7 +281,10 @@ impl Ekf {
             let k = min(1.0, dt / 6.0);
             for i in 0..2 { self.wind_est[i] += (self.v[i] - vax * xb[i] - self.wind_est[i]) * k; }
         }
-        let on_ground = agl_tail < 0.07 && abs(self.v[2]) < 0.6 && len2([self.v[0], self.v[1]]) < 0.8;
+        // land detector without a lidar: estimated height near zero, or motor near idle while the IMU says
+        // the aircraft is standing still on something (1 g, not rotating) close to the ground
+        let still = self.thr_est < 0.15 && abs(len(m.acc) - G) < 0.8 && len(w_meas) < 0.25 && agl_tail < 0.6;
+        let on_ground = (agl_tail < 0.07 || still) && abs(self.v[2]) < 0.6 && len2([self.v[0], self.v[1]]) < 0.8;
         self.was_ground = on_ground;
         Nav {
             p: self.p, v: self.v, q: self.q, w: self.w, af: self.af,

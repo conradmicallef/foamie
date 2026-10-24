@@ -3,7 +3,7 @@
 //! - attitude: complementary (Mahony/DCM-style) filter on the gyro, corrected by gravity from the
 //!   accelerometer with centripetal compensation, and by the compass for heading
 //! - position and velocity: accelerometer dead reckoning corrected by delayed GPS fixes
-//! - height: barometer, GPS, and the tail lidar near the ground
+//! - height: barometer and GPS
 //! - airspeed: wingtip pitot
 
 use crate::math::*;
@@ -64,8 +64,6 @@ pub struct Estimator {
     att_corr: V3,
     hi: usize,
     pitot: f64,
-    lidar: Option<f64>,
-    lidar_age: f64,
     baro_ref: f64,
     baro_init: u32,
     thr_est: f64,
@@ -78,7 +76,7 @@ impl Estimator {
         Estimator {
             q: tr.q, p: tr.p, v: tr.v, gyro_bias: [0.0; 3], w: [0.0; 3], af: [0.0; 3],
             hist: [(tr.p, tr.v); HIST], cum: [[0.0; 3]; HIST], acc_sum: [0.0; 3], last_gps_v: None, att_corr: [0.0; 3],
-            hi: 0, pitot: 0.0, lidar: None, lidar_age: 1.0,
+            hi: 0, pitot: 0.0,
             baro_ref: 0.0, baro_init: 0, thr_est: 0.0, wind_est: [0.0; 2],
         }
     }
@@ -148,22 +146,8 @@ impl Estimator {
         if let Some(b) = m.baro {
             if self.baro_init < 25 { self.baro_ref += (b - self.p[2] - self.baro_ref) / (self.baro_init as f64 + 1.0); self.baro_init += 1; }
             let e = b - self.baro_ref - self.p[2];
-            let near = self.lidar.is_some() && self.lidar_age < 0.2;
-            let k = if near { 0.01 } else { 0.06 };
+            let k = 0.06;
             self.p[2] += k * e; self.v[2] += 0.5 * k * e;
-        }
-        // tail lidar: exact height near the ground, when it points down
-        self.lidar_age += dt;
-        if let Some(l) = m.lidar {
-            self.lidar = l;
-            self.lidar_age = 0.0;
-            if let Some(r) = l {
-                let tail_off = qrot(self.q, [LEGX, 0.0, 0.0])[2];
-                let dir = qrot(self.q, [-1.0, 0.0, 0.0]);
-                let z = r * -dir[2] - tail_off;
-                let e = z - self.p[2];
-                self.p[2] += 0.25 * e; self.v[2] += 0.15 * e;
-            }
         }
         if let Some(pt) = m.pitot { self.pitot += (pt - self.pitot) * 0.5; }
 
@@ -174,7 +158,7 @@ impl Estimator {
         let thrust = AC.tmax * self.thr_est * clamp(1.0 - vf / AC.vp, 0.0, 1.0);
         let vi = sqrt(vf * vf + 2.0 * thrust / (RHO * AC.disc)) - vf;
         let tail_off = qrot(self.q, [LEGX, 0.0, 0.0])[2];
-        let agl_tail = match (self.lidar, self.lidar_age < 0.2) { (Some(r), true) => r * -qrot(self.q, [-1.0, 0.0, 0.0])[2], _ => self.p[2] + tail_off };
+        let agl_tail = self.p[2] + tail_off;
         let mut low = f64::INFINITY;
         for pt in PTS.iter() { low = min(low, self.p[2] + qrot(self.q, pt.r)[2]); }
         let air = max(vax, 0.0);

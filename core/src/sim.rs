@@ -30,7 +30,9 @@ pub struct Sim {
     pub real: bool,
     sensors: Sensors,
     est: Estimator,
-    ekf: Ekf,
+    pub ekf: Ekf,
+    /// Real-plane mode: tail camera + AprilTag precision landing on/off.
+    pub cam_on: bool,
     /// Real-plane mode estimator: the EKF (default) or the simpler complementary filter, for comparison.
     pub use_ekf: bool,
     pub fc: Fc,
@@ -57,7 +59,7 @@ impl Sim {
         let nav = nav_from_truth(&truth, &wind, [0.0; 3]);
         let mut s = Sim {
             truth, wind, var: Variation::IDEAL, real: false,
-            sensors: Sensors::new(seed), est: Estimator::new(&truth), ekf: Ekf::new(&truth), use_ekf: true, fc: Fc::new(nav),
+            sensors: Sensors::new(seed), est: Estimator::new(&truth), ekf: Ekf::new(&truth), use_ekf: true, cam_on: true, fc: Fc::new(nav),
             mode: Mode::QLoiter, auto: None, recover_on: true, vane_on: true, wind_lvl: 0,
             crashed: false, airborne: false, impact: (f64::INFINITY, 0.0),
             sticks: Sticks { ly: 1.0, ..Sticks::default() }, events: [None; MAX_EV],
@@ -76,6 +78,7 @@ impl Sim {
         self.wind = Wind { speed: WINDS[self.wind_lvl], phase: if self.real { ph } else { [0.0; 4] } };
         self.var = if self.real { Variation::random(&mut self.rng) } else { Variation::IDEAL };
         self.sensors = Sensors::new(self.seed);
+        self.sensors.cam_on = self.cam_on;
         self.est = Estimator::new(&self.truth);
         self.ekf = Ekf::new(&self.truth);
         self.fc = Fc::new(nav_from_truth(&self.truth, &self.wind, [0.0; 3]));
@@ -90,6 +93,8 @@ impl Sim {
     }
 
     pub fn set_real(&mut self, on: bool) { self.real = on; self.reset(); }
+    /// Tail camera on/off; takes effect immediately (a camera that fails or is switched off in flight).
+    pub fn set_cam(&mut self, on: bool) { self.cam_on = on; self.sensors.cam_on = on; }
     pub fn set_wind(&mut self, lvl: usize) { self.wind_lvl = lvl.min(2); self.wind.speed = WINDS[self.wind_lvl]; }
 
     pub fn emit(&mut self, code: Ev, a: f64, b: f64, c: f64, d: f64) {
@@ -216,7 +221,8 @@ impl Sim {
                 let phi = self.fc.bank_toward(0.0, 0.0, 16.0);
                 self.fc.fwd_ctl(phi, LAND.alt, LAND.v, dt);
                 let v_close = max(0.0, (n.v[0] * to_pad[0] + n.v[1] * to_pad[1]) / max(d_pad, 1e-3));
-                if d_pad < LAND.k_trig * v_close * v_close + LAND.b_trig { a.phase = Phase::Pullup; a.t = 0.0; self.fc.reset_i(); }
+                // ... or whenever it passes close by, so it can never end up circling the pad (hover braking does the rest)
+                if d_pad < LAND.k_trig * v_close * v_close + LAND.b_trig || d_pad < 8.0 { a.phase = Phase::Pullup; a.t = 0.0; self.fc.reset_i(); }
             }
             Phase::Pullup => {
                 // wings level, then pull the nose straight up: the blown wing broadside is the air brake

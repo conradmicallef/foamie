@@ -22,7 +22,7 @@ A mobile flight simulator for a high-powered 3D foam plane that takes off and la
   - **Safety:** recovery stays armed. It trusts a figure while the plane is on its planned path, and if it does step in, the show carries on with the next figure.
 - **Recovery:** predicts ground impact up to 10 s ahead along the curved flight path and pulls out automatically when the time left is shorter than this airframe needs to stop the sink.
 - **Weathervane:** in QHover/QLoiter the plane turns its wing edge-on to the wind when you leave the yaw stick centred (like ArduPilot's `Q_WVANE_GAIN`); broadside, the wing catches too much wind to hold position. In real-plane mode the wind comes from the EKF's hover drag-fusion estimate (like `EK3_DRAG_*`).
-- **Real plane:** flies the same software on simulated sensors instead of perfect knowledge — see below.
+- **Real plane:** flies the same software on simulated sensors instead of perfect knowledge, and lands on an AprilTag with a tail camera — see below.
 
 Stick convention is a real transmitter's (mode 2): right stick forward = nose down in the wing-borne modes, and tilt toward the belly in the hover modes. On a computer: W/S throttle, A/D yaw, arrow keys pitch and roll.
 
@@ -34,37 +34,43 @@ Stick convention is a real transmitter's (mode 2): right stick forward = nose do
 | Compass | interference from motor current |
 | Barometer | 25 Hz, noise, slow drift, prop-wash pressure error |
 | GPS | 5 Hz, 0.16 s latency, wandering ~1 m position error |
-| Tail lidar | looks down in the hover, 12 m range, reports minimum range when compressed |
+| Tail camera (**Tail cam** button) | looks out of the tail — straight down in the hover. 20 Hz, 640 × 480, 70° field of view, 80 ms latency, 0.7 px corner noise, a slightly crooked mount, frames lost to motion blur above 2.5 rad/s and 4 % at random. Decodes the AprilTag on the pad: a 40 cm tag (to about 9 m) with an 8 cm tag nested in its centre for the last metre. No lidar. |
 | Wingtip pitot | forward airspeed only, unusable below ~3 m/s |
 | Airframe | ±5 % thrust, ±8 % surface effectiveness, CG offset, warped wing, slower servos and motor |
 | Battery | 3S 1000 mAh, voltage sag under load, thrust ∝ voltage² |
 
-The flight controller sees only an estimate built from those sensors, by a 15-state **error-state EKF** like ArduPilot's (`core/src/ekf.rs`): position, velocity, attitude, gyro bias and accelerometer bias. It predicts on the IMU; fuses delayed GPS position and velocity against the state at the time of the fix, plus barometer, tail lidar and compass (with compass-motor compensation, like `COMPASS_MOT`); applies zero-velocity updates on the pad; and gates every measurement (χ²) so glitches are rejected. Because GPS velocity and the accelerometer are tied through the attitude, tilt stays observable during manoeuvres without trusting the accelerometer as a gravity reference. A land detector and a tipped-over motor cut stop the hover throttle from fighting the ground. The cyan cross in the view is where the controller thinks it is.
+The flight controller sees only an estimate built from those sensors, by an 18-state **error-state EKF** like ArduPilot's (`core/src/ekf.rs`): position, velocity, attitude, gyro bias, accelerometer bias and the GPS's slowly wandering position offset. It predicts on the IMU; fuses delayed GPS position and velocity against the state at the time of the fix, plus barometer and compass (with compass-motor compensation, like `COMPASS_MOT`); applies zero-velocity and ground-height updates while standing on the legs; and gates every measurement (χ²) so glitches are rejected. Because GPS velocity and the accelerometer are tied through the attitude, tilt stays observable during manoeuvres without trusting the accelerometer as a gravity reference. A land detector (estimated height, or motor near idle while the IMU feels 1 g and no rotation) and a tipped-over motor cut stop the hover throttle from fighting the ground. The cyan cross in the view is where the controller thinks it is.
+
+**Precision landing.** Each tag detection says where the pad is relative to the aircraft, to a few centimetres, delayed by the camera's latency. The EKF fuses it against the state when the frame was taken, as a position measurement, taking its own attitude as known — the way ArduPilot's precision landing does. Letting the tag also correct the attitude looked attractive but, with a 9 m lever arm, made the filter overconfident: in a long hover the tilt estimate crept 10–20° off. Because the GPS offset is a state of its own, every sighting teaches the EKF the GPS error, so GPS stays accurate for a while after the tag drops out of view. Below about 10 cm the tag is too close to read; height is then held by the IMU and barometer until the feet touch. While the tail points down, a small picture-in-picture shows what the camera sees, with the detector's box.
 
 Estimate error vs truth (`cargo run --release --example est_stats [old]`, hover in wind + circuit + Cuban eight):
 
-| | Earlier complementary filter | EKF |
-|---|---|---|
-| Attitude RMS / worst | 2.8° / 13.7° | **0.9° / 2.7°** |
-| Velocity RMS | 0.23 m/s | **0.14 m/s** |
-| Position RMS | 0.90 m | 0.89 m (the GPS's own wander) |
-| Height RMS | 0.14 m | 0.15 m |
+| | Earlier complementary filter + lidar | EKF + lidar | EKF + tail camera, no lidar |
+|---|---|---|---|
+| Attitude RMS / worst | 2.8° / 13.7° | 0.9° / 2.7° | **0.9° / 2.8°** |
+| Velocity RMS | 0.23 m/s | 0.14 m/s | **0.13 m/s** |
+| Position RMS | 0.90 m | 0.89 m (the GPS's own wander) | **0.42 m** (0.1–0.2 m while the tag is in view) |
+| Height RMS | 0.14 m | 0.15 m | 0.27 m (no lidar; tag and baro) |
 
 ### Results (`cargo run --release --example bench [real]`)
 
-| | Ideal | Real plane |
-|---|---|---|
-| Autoland: tail landings | 18 / 18 | 54 / 54 |
-| Autoland: mean time from pressing Land | 17.5 s | 17.7 s |
-| Autoland: mean distance from pad centre | 0.19 m | 0.74 m (GPS-limited) |
-| QLoiter in 2–4 m/s gusts: mean drift | 0.22 m | 0.82 m |
-| Recovery: full-down dive, inverted motor-off | saved | saved |
-| Recovery false alarms: split-S, FBWA cruise, hover landing | none | none |
-| Aerobatic show in calm air: 12 figures, no recovery, centred within | 2 m | 3 m |
+`bench real nocam` turns the tail camera off.
+
+| | Ideal | Real plane, tail cam | Real plane, GPS only | (before: GPS + lidar) |
+|---|---|---|---|---|
+| Autoland: tail landings | 18 / 18 | 54 / 54 | 54 / 54 | 54 / 54 |
+| Autoland: mean time from pressing Land | 17.0 s | 17.6 s | 18.4 s | 17.6 s |
+| Autoland: mean distance from pad centre | 0.20 m | **0.20 m** | 0.47 m | 0.84 m |
+| QLoiter in 2–4 m/s gusts: mean drift | 0.22 m | 0.71 m | 0.65 m | 0.73 m |
+| Recovery: full-down dive, inverted motor-off | saved | saved | saved | saved |
+| Recovery false alarms: split-S, FBWA cruise, hover landing | none | none | none | none |
+| Aerobatic show in calm air: 12 figures, no recovery, centred within | 2 m | 3 m | | |
+
+With the camera the real plane lands as accurately as the ideal model with perfect knowledge; what is left is the landing controller's own scatter. Modelling the GPS offset as its own EKF state helped even without the camera (0.84 → 0.47 m). QLoiter drift is measured from where the plane started holding; with the tag in view it is held over the true spot, so corrections as the tag pins down the GPS error count as drift here.
 
 Aerobatics (`cargo run --release --example show [real] [wind]`, `show_stats [real]`): path error about 1–5.6 m RMS per figure in calm air, every figure entered into wind. In 4 m/s gusts the ideal-mode show completes with no recoveries; real-plane mode occasionally abandons a figure that strays off its path low down and carries on with the next.
 
-For centimetre landings on a real airframe you would add RTK GPS, optical flow, or a precision-landing beacon.
+On a real airframe the camera side is an OpenMV H7 or similar running AprilTag detection and sending the tag's position to the flight controller over a serial link (ArduPilot: `PLND_TYPE` 1 with MAVLink `LANDING_TARGET`); the tag is printed on the landing mat.
 
 ## Flying real ArduPilot on the foamie (SITL)
 
@@ -93,8 +99,8 @@ cd foamie/sitl && ./run.sh --stage all     # WIND=4 for gusts, SPEEDUP=4 by defa
 ```
 core/                 Rust flight core (no_std, compiles to wasm32)
   src/model.rs        airframe, flat-plate aero ±180°, prop wash, gyroscopics, battery, wind, ground contact
-  src/sensors.rs      sensor models for real-plane mode
-  src/ekf.rs          15-state error-state EKF (real-plane mode)
+  src/sensors.rs      sensor models for real-plane mode, including the tail camera and the AprilTag
+  src/ekf.rs          18-state error-state EKF with AprilTag precision landing (real-plane mode)
   src/estimator.rs    the navigation state type; the earlier complementary filter, kept for comparison
   src/flight.rs       rate & attitude loops, the six modes, guidance, impact prediction
   src/sim.rs          the simulation loop, autopilot tasks, touchdown scoring, events
@@ -106,6 +112,7 @@ sitl/                 ArduPilot SITL JSON backend on the same physics, tail-sitt
 web/                  TypeScript front end
   src/core.ts         loads the WebAssembly core and reads its state and events
   src/render.ts       3D view on a 2D canvas
+  src/tag.ts          the AprilTag on the pad and the tail camera's picture-in-picture
   src/main.ts         sticks, buttons, instruments, messages
   build.mjs           builds everything into one self-contained web/dist/index.html
 ```

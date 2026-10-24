@@ -1,4 +1,5 @@
 // Front end: touch sticks, buttons, instrument overlay and messages. All flight logic runs in the Rust core.
+import { drawCam } from './tag';
 import { Cmd, Core, Ev, Mode, Opt, State, Task, type Event } from './core';
 import { Renderer } from './render';
 import { add, clamp, D2R, qrot, type V3 } from './vec';
@@ -41,7 +42,8 @@ const HINTS: Record<string, string> = {
   land: 'Auto land: straight in at 9 m, pull vertical at the braking point, brake onto the pad, descend fast then 0.45 m/s for the last metre.',
   show: 'Aerobatics: each figure is a real path (lines, circles, rolls on lines) centred on the show centre in front of you and entered into the wind. Before each one the plane flies out, turns back and lines up on the entry gate. Recovery stays armed. Move a stick to take over.',
   recovery: 'Recovery: ground impact was predicted sooner than the plane can stop the sink. Pulling out at full power; control returns once it is safe and the sticks are centred.',
-  real: 'Real plane: the autopilot now flies on simulated sensors (noisy, delayed GPS, drifting baro, vibrating IMU, tail lidar, pitot) through a state estimator. The cyan cross is where it thinks it is. This airframe also has small build errors and a 3S 1000 mAh battery.',
+  real: 'Real plane: the autopilot now flies on simulated sensors (noisy, delayed GPS, drifting baro, vibrating IMU, pitot, and a tail camera that looks for the AprilTag on the pad) through an EKF. The cyan cross is where it thinks it is. This airframe also has small build errors and a 3S 1000 mAh battery.',
+  cam: 'Tail cam: in the hover the camera looks straight down past the legs. When it decodes the 40 cm tag on the pad (or the 8 cm one nested in it, for the last metre) the EKF learns the GPS error and lands on the tag. Switch it off to land on GPS alone.',
 };
 
 // ---- sticks
@@ -176,6 +178,7 @@ function hud(st: State, now: number) {
   else if (st.onGround && !st.airborne) { txt = `${MODE_NAME[st.mode]} · on the legs${Math.hypot(st.p[0], st.p[1]) < 1.5 ? ', on the pad' : ''}`; k = 'ok'; }
   else { txt = `${MODE_NAME[st.mode]} · ${X[2] > 0.8 ? 'hovering' : 'wing-borne'}`; k = ''; }
   const wl = [0, 2, 4][st.windLevel];
+  if (st.real && st.camOn && st.tagLock) txt += ' · tag locked';
   if (wl) txt += ` · wind ${wl} m/s from E`;
   $('statusTxt').textContent = txt; ($('status') as HTMLElement).dataset.k = k;
 
@@ -196,6 +199,8 @@ function hud(st: State, now: number) {
   $('btRecov').setAttribute('aria-pressed', String(st.recoveryOn));
   $('btVane').setAttribute('aria-pressed', String(st.weathervaneOn));
   $('btReal').setAttribute('aria-pressed', String(st.real));
+  ($('btCam') as HTMLButtonElement).hidden = !st.real;
+  $('btCam').setAttribute('aria-pressed', String(st.camOn));
   const L: Record<Mode, string> = { [Mode.Manual]: 'Throttle · Rudder', [Mode.Fbwa]: 'Throttle · Rudder', [Mode.Acro]: 'Throttle · Yaw', [Mode.QStab]: 'Throttle · Spin', [Mode.QHover]: 'Climb · Spin', [Mode.QLoiter]: 'Climb · Spin' };
   const R: Record<Mode, string> = { [Mode.Manual]: 'Elevator · Aileron', [Mode.Fbwa]: 'Pitch · Bank', [Mode.Acro]: 'Pitch · Roll rate', [Mode.QStab]: 'Tilt', [Mode.QHover]: 'Tilt', [Mode.QLoiter]: 'Move' };
   $('lblL').textContent = st.task !== Task.None ? 'Move to take over' : L[st.mode];
@@ -223,6 +228,11 @@ async function main() {
   $('btVane').addEventListener('click', () => {
     const on = !core.state().weathervaneOn; core.opt(Opt.Weathervane, on);
     toast(on ? 'Weathervane on' : 'Weathervane off', on ? 'QHover and QLoiter turn the wing edge-on to the wind when the yaw stick is centred' : 'Heading stays where you leave it; broadside to the wind it will drift', '', 2000);
+  });
+  $('btCam').addEventListener('click', () => {
+    const on = !core.state().camOn; core.opt(Opt.Camera, on);
+    if (on) showHint('cam');
+    toast(on ? 'Tail cam on' : 'Tail cam off', on ? 'Precision landing on the AprilTag' : 'Landing on GPS alone', '', 1800);
   });
   $('btReal').addEventListener('click', () => {
     real = !real; core.opt(Opt.RealPlane, real); renderer.trail = [];
@@ -253,6 +263,14 @@ async function main() {
       if (trailT > 0.04) { trailT = 0; renderer.trail.push(add(st.p, qrot(st.q, [-0.6, 0, 0])) as V3); if (renderer.trail.length > 700) renderer.trail.shift(); }
     }
     renderer.draw(st, ft);
+    // tail camera picture-in-picture while the tail points at the ground
+    const camShow = st.real && st.camOn && !st.crashed && qrot(st.q, [1, 0, 0])[2] > 0.5;
+    const cw = $('camWrap'); cw.hidden = !camShow;
+    if (camShow) {
+      drawCam($('camv') as HTMLCanvasElement, st.p, st.q, st.tagLock, st.tagPx, st.tagId);
+      cw.classList.toggle('lock', st.tagLock);
+      $('camCap').textContent = st.tagLock ? `Tag locked · ${st.tagId === 0 ? '40' : '8'} cm` : 'Tail cam · searching';
+    }
     hud(st, now);
     requestAnimationFrame(frame);
   };

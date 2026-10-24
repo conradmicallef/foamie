@@ -26,7 +26,7 @@ fn panic(_: &core::panic::PanicInfo) -> ! { core::arch::wasm32::unreachable() }
 
 static mut SIM: Option<Sim> = None;
 /// State layout (keep in step with `web/src/core.ts`).
-pub const NSTATE: usize = 64;
+pub const NSTATE: usize = 72;
 static mut STATE: [f64; NSTATE] = [0.0; NSTATE];
 static mut EVBUF: [f64; MAX_EV * 5] = [0.0; MAX_EV * 5];
 
@@ -53,10 +53,10 @@ fn sim() -> &'static mut Sim {
         _ => if let Some(f) = aerobatics::Fig::from(c.wrapping_sub(10)) { s.start_show(Some(f)); },
     }
 }
-/// 1 wind level (0–2), 2 recovery on/off, 3 weathervane on/off, 4 real plane on/off (resets).
+/// 1 wind level (0–2), 2 recovery on/off, 3 weathervane on/off, 4 real plane on/off (resets), 5 tail camera on/off.
 #[no_mangle] pub extern "C" fn fz_set_opt(id: u32, v: f64) {
     let s = sim();
-    match id { 1 => s.set_wind(v as usize), 2 => s.recover_on = v != 0.0, 3 => s.vane_on = v != 0.0, 4 => s.set_real(v != 0.0), _ => {} }
+    match id { 1 => s.set_wind(v as usize), 2 => s.recover_on = v != 0.0, 3 => s.vane_on = v != 0.0, 4 => s.set_real(v != 0.0), 5 => s.set_cam(v != 0.0), _ => {} }
 }
 #[no_mangle] pub extern "C" fn fz_advance(ft: f64) { sim().advance(ft); }
 
@@ -83,7 +83,9 @@ fn sim() -> &'static mut Sim {
     o[27] = if s.impact.0.is_finite() { s.impact.0 } else { -1.0 };
     o[28] = s.impact.1;
     o[29] = s.fc.time_to_recover();
-    o[30] = s.fc.deliberate_landing() as u8 as f64;
+    // an autoland's own controlled descent is deliberate too (it descends faster than a pilot would while high)
+    let autoland = s.auto.map_or(false, |a| a.task == Task::Land && matches!(a.phase, flight::Phase::Brake | flight::Phase::Descend));
+    o[30] = (s.fc.deliberate_landing() || autoland) as u8 as f64;
     o[31] = s.recover_on as u8 as f64;
     o[32] = s.vane_on as u8 as f64;
     o[33] = s.real as u8 as f64;
@@ -104,6 +106,13 @@ fn sim() -> &'static mut Sim {
     o[58] = n.v[2];
     o[59] = s.var.battery as u8 as f64;
     if let Some(a) = s.auto { if a.task == Task::Show { o[60] = a.show.current() as u8 as f64; o[61] = a.show.fig as f64; o[62] = a.show.n as f64; o[63] = a.show.stage as u8 as f64; } }
+    // tail camera / AprilTag precision landing (real-plane mode)
+    o[64] = s.cam_on as u8 as f64;
+    o[65] = (s.real && s.cam_on && s.ekf.tag_age < 0.3) as u8 as f64;
+    o[66] = s.ekf.tag_id as f64;
+    o[67..70].copy_from_slice(&s.ekf.tag_px);
+    o[70] = min(s.ekf.tag_age, 99.0);
+    o[71] = hypot(s.ekf.bgps[0], s.ekf.bgps[1]);
     unsafe { STATE = o; STATE.as_ptr() }
 }
 

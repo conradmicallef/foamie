@@ -118,6 +118,15 @@ button[aria-pressed="true"] { color: var(--panel-solid); background: var(--ink);
   box-shadow: 0 2px 10px rgba(0,0,0,.35); pointer-events: none;
 }
 #warn.caution { background: var(--warn); }
+#camWrap {
+  /* tail camera picture-in-picture: right side, above the right stick */
+  position: fixed; z-index: 2; margin: 0; padding: 4px; width: 132px;
+  right: max(16px, calc(env(safe-area-inset-right, 0px) + 8px));
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 22px + var(--stick) + 110px);
+}
+#camv { display: block; width: 124px; height: 93px; border-radius: 4px; }
+#camWrap figcaption { margin-top: 3px; font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); text-align: center; }
+#camWrap.lock figcaption { color: var(--ok); }
 #toast {
   /* bottom centre, just above the sticks, so it never covers the aircraft */
   position: fixed; z-index: 3; left: 50%; transform: translateX(-50%);
@@ -193,6 +202,7 @@ button[aria-pressed="true"] { color: var(--panel-solid); background: var(--ink);
         <button id="btRecov" aria-pressed="true">Recovery</button>
         <button id="btVane" aria-pressed="true">Weathervane</button>
         <button id="btReal" aria-pressed="false">Real plane</button>
+        <button id="btCam" aria-pressed="true" hidden>Tail cam</button>
         <button id="btReset">Reset</button>
       </div>
     </div>
@@ -221,6 +231,10 @@ button[aria-pressed="true"] { color: var(--panel-solid); background: var(--ink);
     </div>
     <p class="pickNote">Flown by the autopilot from wherever you are; it climbs to a safe height first. Recovery stays armed. Move a stick to take over.</p>
   </div>
+  <figure id="camWrap" class="panel" hidden>
+    <canvas id="camv" aria-label="Tail camera view looking for the landing tag"></canvas>
+    <figcaption id="camCap">Tail cam</figcaption>
+  </figure>
   <div id="warn" hidden><span id="warnTxt"></span></div>
   <div id="toast" class="panel" hidden><h2 id="toastH"></h2><p id="toastP"></p></div>
 </div>

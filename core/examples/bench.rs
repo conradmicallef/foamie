@@ -7,13 +7,14 @@ fn drain(s: &mut Sim) -> Vec<(Ev, [f64; 4])> { s.take_events().iter().flatten().
 
 fn main() {
     let real = std::env::args().any(|a| a == "real");
+    let nocam = std::env::args().any(|a| a == "nocam");
     let seeds: u64 = if real { 3 } else { 1 };
-    println!("== {} ==", if real { "REAL PLANE (sensors + estimator + build errors + battery)" } else { "IDEAL" });
+    println!("== {} ==", if real { if nocam { "REAL PLANE, no camera" } else { "REAL PLANE (sensors + EKF + AprilTag camera + build errors + battery)" } } else { "IDEAL" });
     // ---- autoland
     let (mut tt, mut miss, mut score, mut n, mut fails) = (0.0, 0.0, 0.0, 0, 0);
     for seed in 0..seeds { for wl in 0..3 { for off in [0.0, 5.0, 10.0, 15.0, 20.0, 25.0] {
         let mut s = Sim::new(100 + seed * 7 + wl as u64 * 31 + off as u64);
-        if real { s.set_real(true); }
+        if real { s.set_cam(!nocam); s.set_real(true); }
         s.set_wind(wl); s.start_auto(Task::Takeoff); run(&mut s, 14.0 + off); drain(&mut s);
         s.start_auto(Task::Land); let t0 = s.truth.t;
         let mut res = None;
@@ -30,7 +31,7 @@ fn main() {
     let (mut dsum, mut dmax, mut k) = (0.0f64, 0.0f64, 0);
     for wl in [1usize, 2] { for spin in [false, true] {
         let mut s = Sim::new(500 + wl as u64 * 3 + spin as u64);
-        if real { s.set_real(true); }
+        if real { s.set_cam(!nocam); s.set_real(true); }
         s.set_wind(wl); s.set_mode(Mode::QLoiter); s.sticks.ly = -0.7; run(&mut s, 4.0); s.sticks.ly = 0.0;
         if spin { s.sticks.lx = 1.0; run(&mut s, 0.6); s.sticks.lx = 0.0; }
         run(&mut s, 3.0);
@@ -42,7 +43,7 @@ fn main() {
 
     // ---- recovery scenarios
     let sc = |name: &str, f: &dyn Fn(&mut Sim)| {
-        let mut s = Sim::new(900); if real { s.set_real(true); }
+        let mut s = Sim::new(900); if real { s.set_cam(!nocam); s.set_real(true); }
         s.start_auto(Task::Takeoff); run(&mut s, 12.0); drain(&mut s);
         f(&mut s);
         let ev = drain(&mut s);
@@ -53,7 +54,7 @@ fn main() {
     sc("acro split-S at 18 m", &|s| { s.set_mode(Mode::Acro); s.sticks.ly = 1.0 - 2.0 * 0.4; s.sticks.rx = 1.0; run(s, 0.55); s.sticks.rx = 0.0; s.sticks.ry = 1.0; run(s, 3.0); s.sticks.ry = 0.0; run(s, 4.0); });
     sc("inverted, motor off", &|s| { run(s, 3.0); s.set_mode(Mode::Manual); s.sticks.ly = 1.0; s.sticks.rx = 1.0; run(s, 0.45); s.sticks.rx = 0.0; run(s, 9.0); });
     sc("FBWA cruise (no alarm)", &|s| { s.set_mode(Mode::Fbwa); s.sticks.ly = 1.0 - 2.0 * 0.42; run(s, 10.0); });
-    let mut s = Sim::new(901); if real { s.set_real(true); }
+    let mut s = Sim::new(901); if real { s.set_cam(!nocam); s.set_real(true); }
     s.set_mode(Mode::QLoiter); s.sticks.ly = -1.0; run(&mut s, 4.0); s.sticks.ly = 0.85; run(&mut s, 14.0);
     let ev = drain(&mut s);
     println!("{:24} recoveries {}  landed {}", "QLoiter full-down land", ev.iter().filter(|e| e.0 == Ev::Recovery).count(), ev.iter().any(|e| e.0 == Ev::TailLanding));
