@@ -73,8 +73,11 @@ button[aria-pressed="true"] { color: var(--panel-solid); background: var(--ink);
 .auto button[aria-pressed="true"] { background: var(--accent); color: var(--panel-solid); }
 .auto button { border-color: rgba(255, 138, 42, 0.45); }
 
-.hint { flex-basis: 100%; font-size: 12px; color: var(--ink); opacity: 0.92; text-shadow: 0 1px 2px rgba(0,0,0,.6); max-width: 60ch; line-height: 1.35; transition: opacity .6s; pointer-events: none; }
-.hint.fade { opacity: 0; }
+.hint { flex-basis: 100%; pointer-events: none; }
+#hint { display: inline-block; font-size: 12px; color: var(--ink); max-width: 60ch; line-height: 1.35; transition: opacity .6s;
+  background: rgba(10, 14, 18, 0.72); border-radius: 6px; padding: 5px 9px; }
+#hint:empty { display: none; }
+#hint.fade { opacity: 0; }
 
 .stick {
   position: fixed; z-index: 2; width: var(--stick); height: var(--stick);
@@ -92,7 +95,8 @@ button[aria-pressed="true"] { color: var(--panel-solid); background: var(--ink);
   border-radius: 50%; background: rgba(18, 23, 28, 0.7); border: 2px solid var(--accent);
   box-shadow: 0 2px 8px rgba(0,0,0,.35); pointer-events: none; will-change: transform;
 }
-.stick .lbl { position: absolute; left: 0; right: 0; bottom: -17px; text-align: center; font-size: 10px; font-weight: 700; letter-spacing: 0.12em; color: var(--ink); text-shadow: 0 1px 2px rgba(0,0,0,.7); text-transform: uppercase; }
+.stick .lbl { position: absolute; left: 50%; transform: translateX(-50%); bottom: -21px; white-space: nowrap; font-size: 10px; font-weight: 700; letter-spacing: 0.12em; color: var(--ink); text-transform: uppercase;
+  background: rgba(10, 14, 18, 0.72); border-radius: 4px; padding: 2px 7px; }
 .thrbar { position: absolute; left: -9px; top: 12%; bottom: 12%; width: 4px; border-radius: 2px; background: rgba(241,244,239,.2); overflow: hidden; }
 .thrbar i { position: absolute; left: 0; right: 0; bottom: 0; background: var(--accent); height: 0; }
 
@@ -192,7 +196,7 @@ button[aria-pressed="true"] { color: var(--panel-solid); background: var(--ink);
         <button id="btReset">Reset</button>
       </div>
     </div>
-    <div class="hint" id="hint"></div>
+    <div class="hint"><span id="hint"></span></div>
   </div>
 
   <div class="stick" id="stL"><div class="thrbar"><i id="thrFill"></i></div><div class="knob"></div><span class="lbl" id="lblL">Throttle · Yaw</span></div>
